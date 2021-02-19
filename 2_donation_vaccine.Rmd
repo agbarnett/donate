@@ -1,0 +1,358 @@
+---
+title: "Willingness to donate vaccine"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
+options(width=1000) # Wide pages
+options(scipen=999) # avoid scientific presentation
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(boot) # for inv.logit
+library(flextable)
+source('99_functions.R')
+```
+
+We use a Bayesian logistic model that compares the answering yes to any of the three categories:
+
+* Should donate more than 10%
+* Should donate 10%
+* Should donate less than 10%
+
+With the three categories:
+
+* Should not donate
+* Prefer not to say
+* Do not know
+
+We allow the effect of response to vary across countries. For example, the education level "below primary" is not fixed over countries but instead varies by country. We plot the country-level estimates and overall estimates.
+
+The results are the estimated mean probability of agreeing and a Bayesian 95% credible interval for the mean.
+
+# Education
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_education.RData') # from 1_bayes_donation_model_education.R
+
+all_results = process_results(in.results=bugs.results, max.category.num=4) %>%
+  rename('enum' = 'num')
+```
+
+### Table of estimates (education)
+
+```{r}
+# 
+stats = group_by(all_results, countrynum, overall, enum) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
+  mutate(enice = factor(enum, levels=1:5, labels=elabels)) %>%
+  ungroup()
+#
+for_table = mutate(stats,
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   education = factor(enum, levels=1:5, labels=elabels)) %>%
+  select(country, education, mean, lower, upper)
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (education)
+
+```{r, fig.width=7.5, fig.height=6}
+# forest plots
+fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  theme_bw()+
+  facet_wrap(~enice)+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'none')
+fplot
+jpeg('figures/education_donation.jpg', width=5, height=4.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+The overall estimate combined across all countries is in red.
+
+### Tests of differences (education)
+
+The table shows the differences in the probability of a willingness to donate vaccine for the four education groups and the reference group of "Less than primary". The p-value is the probability that the probability to donate vaccine is higher in each of the four groups compared with the reference group.
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res) %>%
+  pivot_wider(names_from=enum, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1,
+         diff3 = p4 - p1,
+         diff4 = p5 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'Primary',
+    name == 'diff2' ~ 'Secondary',
+    name == 'diff3' ~ 'University',
+    name == 'diff4' ~ 'Unknown'
+  )) %>%
+  rename('Education' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+# Political leaning
+
+There was some missing data for political leaning. As there was a relatively large amount we considered 'missing' as its own category.
+
+We analyse ideology using tertiles within each country, so we model four groups: left, centre, right and missing. 
+
+### Table of estimates and tests of differences (political leaning)
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_politics.RData') # from 1_bayes_donation_model_politics.R
+
+## construct probability of supporting vaccine donation from chains
+names = names(bugs.results$sims.array[1,1,]) # names of all the stored results
+all_results = NULL
+for (countrynum in 1:n.country){
+  index1 = grep(paste('^beta\\[', countrynum, sep=''), names) # locations of the alpha's for this country
+  c1 = bugs.results$sims.array[,1,index1] # chain 1  
+  c2 = bugs.results$sims.array[,2,index1] # chain 2
+  frame = data.frame(countrynum = countrynum, res=c(c1, c2), index=1:(length(c1)*2))
+  all_results = bind_rows(all_results, frame)
+}
+
+# 
+all_results = mutate(all_results,
+                     or = exp(res), # odds ratio
+                     overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+```
+
+```{r}
+# 
+stats = group_by(all_results, countrynum, overall) %>%
+  summarise(mean = mean(or),
+            lower = quantile(or, 0.025), # Bayesian CI
+            upper = quantile(or, 1 - 0.025),
+            p = sum(res<0)/n() ) %>% # Bayesian p-value
+  ungroup()
+#
+for_table = mutate(stats,
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall'))) %>%
+  select(country, mean, lower, upper, p) %>%
+  rename('p-value' = 'p')
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  merge_v(j=1)
+ftab
+```  
+
+The p-value is the probability that the odds ratio is less than 1.
+
+### Plot of odds ratio estimates (political leaning)
+
+```{r, fig.width=5, fig.height=5}
+# forest plots
+fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+  geom_point(size=3)+
+  geom_hline(yintercept=1, lty=2)+ # reference line
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting vaccine donation\nper 1 unit increase in ideology')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'none')
+fplot
+jpeg('figures/politics_donation.jpg', width=4, height=4, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+
+# Gender
+
+We look at male gender versus all other responses. 
+There was no missing data for gender.
+
+### Table of estimates (gender)
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_gender.RData') # from 1_bayes_donation_model_politics.R
+
+## construct probability of supporting vaccine donation from chains
+names = names(bugs.results$sims.array[1,1,]) # names of all the stored results
+all_results = NULL
+for (countrynum in 1:n.country){
+  index1 = grep(paste('^beta\\[', countrynum, sep=''), names) # locations  for this country
+  c1 = bugs.results$sims.array[,1,index1] # chain 1  
+  c2 = bugs.results$sims.array[,2,index1] # chain 2
+  frame = data.frame(countrynum = countrynum, res=c(c1, c2), index=1:(length(c1)*2))
+  all_results = bind_rows(all_results, frame)
+}
+# now add the overall mean
+index1 = grep('mu.beta', names) # 
+c1 = bugs.results$sims.array[,1,index1] # chain 1  
+c2 = bugs.results$sims.array[,2,index1] # chain 2
+frame = data.frame(countrynum = n.country+1, res=c(c1, c2), index=1:(length(c1)*2))
+all_results = bind_rows(all_results, frame)
+
+# 
+all_results = mutate(all_results,
+                     or = exp(res), # odds ratio
+                     overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+```
+
+
+```{r}
+# 
+stats = group_by(all_results, countrynum, overall) %>%
+  summarise(mean = mean(or),
+            lower = quantile(or, 0.025), # Bayesian CI
+            upper = quantile(or, 1 - 0.025),
+            p = sum(res<0)/n() ) %>% # Bayesian p-value
+  ungroup()
+#
+for_table = mutate(stats,
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall'))) %>%
+  select(country, mean, lower, upper, p) %>%
+  rename('p-value' = 'p')
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  merge_v(j=1)
+ftab
+```  
+
+The p-value is the probability that the odds ratio is less than 1.
+
+
+### Plot of estimates (gender)
+
+```{r, fig.width=5, fig.height=5}
+# annotate
+text1 = data.frame(x=8.5, y=1, label='Males more likely', lower=1, upper=1, overall=1)
+text2 = data.frame(x=8.5, y=1, label='Males less likely', lower=1, upper=1, overall=1)
+# forest plots
+fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+  geom_point(size=3)+
+  geom_hline(yintercept=1, lty=2)+ # reference line
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  geom_text(data=text1, aes(x=x, y=y, label=label), adj=-0.1)+
+  geom_text(data=text2, aes(x=x, y=y, label=label), adj=1.1)+
+  ylab('Odds ratio for supporting vaccine donation for males')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'none')
+fplot
+jpeg('figures/gender_donation.jpg', width=4, height=4, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+
+# Age
+
+
+### Table of estimates (age)
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_age.RData') # from 1_bayes_donation_model_age.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results=bugs.results, max.category.num=3) %>%
+  rename('age_num' = 'num')
+
+```
+
+
+### Table of estimates (age)
+
+```{r}
+# 
+stats = group_by(all_results, countrynum, overall, age_num) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
+  mutate(age_nice = factor(age_num, levels=1:3, labels=age_labels)) %>%
+  ungroup()
+#
+for_table = mutate(stats,
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   age = factor(age_num, levels=1:3, labels=age_labels)) %>%
+  select(country, age, mean, lower, upper)
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (age)
+
+```{r, fig.width=7.5, fig.height=6}
+# forest plots
+fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  theme_bw()+
+  facet_wrap(~age_nice)+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'none')
+fplot
+jpeg('figures/age_donation.jpg', width=5.5, height=4.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+# Multiple variable model
+
+Here we use a multiple logistic regression model with independent variables of age, sex, education and politics.
