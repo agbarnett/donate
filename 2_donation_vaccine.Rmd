@@ -2,6 +2,7 @@
 title: "Willingness to donate vaccine"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: word_document
+bibliography: references.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -9,12 +10,18 @@ knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, c
 options(width=1000) # Wide pages
 options(scipen=999) # avoid scientific presentation
 library(ggplot2)
+library(stringr)
 library(dplyr)
 library(tidyr)
+library(RColorBrewer)
 library(boot) # for inv.logit
 library(flextable)
 source('99_functions.R')
+# consistent colour for missing category:
+missing_colour = 'darkseagreen3'
 ```
+
+# Statistical methods
 
 We use a Bayesian logistic model that compares the answering yes to any of the three categories:
 
@@ -28,9 +35,44 @@ With the three categories:
 * Prefer not to say
 * Do not know
 
-We allow the effect of response to vary across countries. For example, the education level "below primary" is not fixed over countries but instead varies by country. We plot the country-level estimates and overall estimates.
+We examine the association with the binary outcome and the independent variables of age (3 categories), gender (2 categories), education (3 categories), altruism (3 categories), income (3 categories) and political ideology (3 categories). We fitted each variable independently and then used all four in a multiple variable model.
 
-The results are the estimated mean probability of agreeing and a Bayesian 95% credible interval for the mean.
+There was some missing data for education (1.5%) and political ideology (15.9%) and to deal with this we included "missing" as a separate category. Our reasoning was so that these responses were not excluded from the analyses and because an answer of 'missing' to these two questions may group people with similar attitudes to donating the vaccine.
+
+Political ideology was originally asked on a scale of 0 (left) to 10 (right). The centre of the distribution on this scale varied greatly between countries. To make a more comparable variable for this multi-country analysis we split each country's results into tertiles to give a relative measure of political leaning within countries. So this variable had four categories: left, centre, right, missing.
+
+The model was fitted as a Bayesian logistic regression model using random effects by country. We allowed the effect of the independent variables to vary by country as we had a strong expectation of differences between countries. For example, the education level "university" is not fixed over countries but instead varies by country around an overall effect. We plotted the country-level estimates and overall estimates. We plotted the estimated mean probability of agreeing and a Bayesian 95% credible interval for the mean.
+
+To test whether the independent variables did vary by country we fitted an alternative fixed effects model and compared the model fit using the deviance information criterion (DIC) which balances model complexity and fit [@Spiegelhalter2014]. We compared the more complex model with a random effect in each country with the simpler model with a fixed effect. All models used a random intercept in each country to account for overall differences between countries in the willingness to donate vaccines.
+
+The Bayesian models were fitted in WinBUGS (version 1.4.3) and the plots were made using R (version 4.0.3). We used two chains thinned by 3 with a burn-in and sample of 4,000. We visually checked the convergence and mixing of the chains. We used vague normal priors for the mean parameters in the logistic regression model and vague gamma priors for the inverse variances. The Bayesian models and R code are freely available on github (https://github.com/agbarnett/donate).
+
+# Descriptive statistics
+
+### Gender
+
+```{r}
+#
+load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
+#
+for_tab = mutate(data, sex = case_when(
+  gender == 'Male' ~ 1,
+  gender == 'Maschio' ~ 1,
+  gender == 'Masculino' ~ 1,
+  gender == 'Homme' ~ 1,
+  is.character(gender) ~ 0
+),
+sex = factor(sex, levels=0:1, labels=c('Female','Male'))
+)
+tab = group_by(for_tab, sex) %>%
+  tally() %>%
+  mutate(percent = round(100*prop.table(n)))
+ftab = flextable(tab) %>%
+  theme_box() %>%
+  autofit()
+ftab
+```
+
 
 # Education
 
@@ -38,24 +80,43 @@ The results are the estimated mean probability of agreeing and a Bayesian 95% cr
 # get the results from the winbugs model
 load('results/bugs_model_education.RData') # from 1_bayes_donation_model_education.R
 
-all_results = process_results(in.results=bugs.results, max.category.num=4) %>%
+#all_results_fixed = process_results_fixed(in.results=bugs.results.fixed, max.category.num=4) 
+all_results = process_results_random(in.results=bugs.results, max.category.num=4) %>%
   rename('enum' = 'num')
 ```
+
+### Fixed versus random model (education)
+
+Here we examine whether the effect of education varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is strong evidence that the random model is better. 
 
 ### Table of estimates (education)
 
 ```{r}
 # 
-stats = group_by(all_results, countrynum, overall, enum) %>%
+stats_education = group_by(all_results, countrynum, overall, enum) %>%
   summarise(mean = mean(p),
             lower = quantile(p, 0.025), # Bayesian CI
             upper = quantile(p, 1 - 0.025)) %>%
-  mutate(enice = factor(enum, levels=1:5, labels=elabels)) %>%
+  mutate(enice = factor(enum, levels=1:4, labels=elabels)) %>%
   ungroup()
 #
-for_table = mutate(stats,
-                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
-                   education = factor(enum, levels=1:5, labels=elabels)) %>%
+for_table = mutate(stats_education,
+       country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+       education = factor(enum, levels=1:4, labels=elabels)) %>%
   select(country, education, mean, lower, upper)
 #
 ftab = flextable(for_table) %>%
@@ -68,40 +129,50 @@ ftab
 
 ### Plot of estimates (education)
 
-```{r, fig.width=7.5, fig.height=6}
+```{r, fig.width=5.5, fig.height=6}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_education, 
+                  countrynum = ifelse(enum==1, countrynum-0.2, countrynum),
+                  countrynum = ifelse(enum==2, countrynum-0.1, countrynum),
+                  countrynum = ifelse(enum==3, countrynum+0.1, countrynum),
+                  countrynum = ifelse(enum==4, countrynum+0.2, countrynum))
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = elabels %in% c('Unknown','Missing')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
 # forest plots
-fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(enum)))+
   geom_point(size=2)+
   geom_errorbar(width=0, size=1.05)+
-  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  scale_color_manual('Education:', values=colours, labels=elabels)+ # 
   theme_bw()+
-  facet_wrap(~enice)+
   coord_flip()+
   scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
   xlab('')+
   ylab('Probability of supporting vaccine donation')+
   theme(panel.grid.minor = element_blank(),
-        legend.position = 'none')
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
 fplot
-jpeg('figures/education_donation.jpg', width=5, height=4.5, units='in', res=500)
+jpeg('figures/education_donation.jpg', width=5.5, height=6.5, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
 
-The overall estimate combined across all countries is in red.
 
-### Tests of differences (education)
+### Tests of overall differences (education)
 
-The table shows the differences in the probability of a willingness to donate vaccine for the four education groups and the reference group of "Less than primary". The p-value is the probability that the probability to donate vaccine is higher in each of the four groups compared with the reference group.
+The table shows the differences in the overall probability of a willingness to donate vaccine for the four education groups and the reference group of "Primary or less". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the three groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
 
 ```{r}
 tests = filter(all_results, countrynum==8) %>%
-  select(-countrynum, -overall, -res) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
   pivot_wider(names_from=enum, values_from=p, names_prefix='p') %>%
   mutate(diff1 = p2 - p1,
          diff2 = p3 - p1,
-         diff3 = p4 - p1,
-         diff4 = p5 - p1) %>%
+         diff3 = p4 - p1) %>%
   pivot_longer(cols=starts_with('diff')) %>%
   group_by(name) %>%
   summarise(mean = mean(value),
@@ -110,10 +181,9 @@ tests = filter(all_results, countrynum==8) %>%
             p = sum(value>0)/n()) %>%
   ungroup() %>%
   mutate(name = case_when(
-    name == 'diff1' ~ 'Primary',
-    name == 'diff2' ~ 'Secondary',
-    name == 'diff3' ~ 'University',
-    name == 'diff4' ~ 'Unknown'
+    name == 'diff1' ~ 'Secondary',
+    name == 'diff2' ~ 'University',
+    name == 'diff3' ~ 'Unknown'
   )) %>%
   rename('Education' = 'name',
          'p-value' = 'p')
@@ -127,79 +197,126 @@ ftab
 
 # Political leaning
 
-There was some missing data for political leaning. As there was a relatively large amount we considered 'missing' as its own category.
-
-We analyse ideology using tertiles within each country, so we model four groups: left, centre, right and missing. 
-
-### Table of estimates and tests of differences (political leaning)
-
 ```{r, include=FALSE}
 # get the results from the winbugs model
 load('results/bugs_model_politics.RData') # from 1_bayes_donation_model_politics.R
 
 ## construct probability of supporting vaccine donation from chains
-names = names(bugs.results$sims.array[1,1,]) # names of all the stored results
-all_results = NULL
-for (countrynum in 1:n.country){
-  index1 = grep(paste('^beta\\[', countrynum, sep=''), names) # locations of the alpha's for this country
-  c1 = bugs.results$sims.array[,1,index1] # chain 1  
-  c2 = bugs.results$sims.array[,2,index1] # chain 2
-  frame = data.frame(countrynum = countrynum, res=c(c1, c2), index=1:(length(c1)*2))
-  all_results = bind_rows(all_results, frame)
-}
-
-# 
-all_results = mutate(all_results,
-                     or = exp(res), # odds ratio
-                     overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+all_results = process_results_random(in.results=bugs.results, max.category.num=4) %>%
+  rename('p_num' = 'num')
 ```
+
+### Fixed versus random model (political leaning)
+
+Here we examine whether the effect of political leaning varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is strong evidence that the random model is better. 
+
+### Table of estimates and tests of differences (political leaning)
 
 ```{r}
 # 
-stats = group_by(all_results, countrynum, overall) %>%
-  summarise(mean = mean(or),
-            lower = quantile(or, 0.025), # Bayesian CI
-            upper = quantile(or, 1 - 0.025),
-            p = sum(res<0)/n() ) %>% # Bayesian p-value
+stats_politics = group_by(all_results, countrynum, p_num, overall) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
   ungroup()
 #
-for_table = mutate(stats,
+for_table = mutate(stats_politics,
+                   politics = factor(p_num, levels=1:4, labels=poll_labels),
                    country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall'))) %>%
-  select(country, mean, lower, upper, p) %>%
-  rename('p-value' = 'p')
+  select(country, politics, mean, lower, upper) 
 #
 ftab = flextable(for_table) %>%
   theme_box() %>%
   autofit() %>%
-  colformat_num(2:4, digits=2) %>%
-  colformat_num(5, digits=3) %>%
+  colformat_num(3:5, digits=2) %>%
+#  colformat_num(6, digits=3) %>%
   merge_v(j=1)
 ftab
 ```  
 
-The p-value is the probability that the odds ratio is less than 1.
 
-### Plot of odds ratio estimates (political leaning)
+### Plot of estimates (political leaning)
 
 ```{r, fig.width=5, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_politics, 
+                  countrynum = ifelse(p_num==1, countrynum-0.2, countrynum),
+                  countrynum = ifelse(p_num==2, countrynum-0.1, countrynum),
+                  countrynum = ifelse(p_num==3, countrynum+0.1, countrynum),
+                  countrynum = ifelse(p_num==4, countrynum+0.2, countrynum))
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = poll_labels %in% c('Unknown','Missing')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
 # forest plots
-fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(p_num)))+
   geom_point(size=3)+
-  geom_hline(yintercept=1, lty=2)+ # reference line
+#  geom_hline(yintercept=1, lty=2)+ # reference line
   geom_errorbar(width=0, size=1.05)+
-  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  scale_color_manual('Political ideology:', values=colours, labels = poll_labels)+ 
   theme_bw()+
   coord_flip()+
   scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
   xlab('')+
-  ylab('Odds ratio for supporting vaccine donation\nper 1 unit increase in ideology')+
+  ylab('Probability of supporting vaccine donation')+
   theme(panel.grid.minor = element_blank(),
-        legend.position = 'none')
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
 fplot
-jpeg('figures/politics_donation.jpg', width=4, height=4, units='in', res=500)
+jpeg('figures/politics_donation.jpg', width=5, height=5.5, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
+
+### Tests of overall differences (political leaning)
+
+The table shows the differences in the overall probability of a willingness to donate vaccine for the four political groups groups and the reference group of "Left". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the three groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=p_num, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1,
+         diff3 = p4 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'Centre',
+    name == 'diff2' ~ 'Right',
+    name == 'diff3' ~ 'Missing'
+  )) %>%
+  rename('Political leaning' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
 
 
 # Gender
@@ -207,83 +324,79 @@ invisible(dev.off())
 We look at male gender versus all other responses. 
 There was no missing data for gender.
 
-### Table of estimates (gender)
-
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_model_gender.RData') # from 1_bayes_donation_model_politics.R
+load('results/bugs_model_gender.RData') # from 1_bayes_donation_model_education.R
 
-## construct probability of supporting vaccine donation from chains
-names = names(bugs.results$sims.array[1,1,]) # names of all the stored results
-all_results = NULL
-for (countrynum in 1:n.country){
-  index1 = grep(paste('^beta\\[', countrynum, sep=''), names) # locations  for this country
-  c1 = bugs.results$sims.array[,1,index1] # chain 1  
-  c2 = bugs.results$sims.array[,2,index1] # chain 2
-  frame = data.frame(countrynum = countrynum, res=c(c1, c2), index=1:(length(c1)*2))
-  all_results = bind_rows(all_results, frame)
-}
-# now add the overall mean
-index1 = grep('mu.beta', names) # 
-c1 = bugs.results$sims.array[,1,index1] # chain 1  
-c2 = bugs.results$sims.array[,2,index1] # chain 2
-frame = data.frame(countrynum = n.country+1, res=c(c1, c2), index=1:(length(c1)*2))
-all_results = bind_rows(all_results, frame)
-
-# 
-all_results = mutate(all_results,
-                     or = exp(res), # odds ratio
-                     overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+all_results = process_results_random(in.results=bugs.results, max.category.num=2) %>%
+  rename('gnum' = 'num')
+glabels = c('Not male','Male')
 ```
 
+### Fixed versus random model (gender)
+
+Here we examine whether the effect of gender varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is moderate evidence that the random model is better. 
+
+### Table of estimates (gender)
 
 ```{r}
 # 
-stats = group_by(all_results, countrynum, overall) %>%
-  summarise(mean = mean(or),
-            lower = quantile(or, 0.025), # Bayesian CI
-            upper = quantile(or, 1 - 0.025),
-            p = sum(res<0)/n() ) %>% # Bayesian p-value
+stats_gender = group_by(all_results, countrynum, gnum, overall) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
   ungroup()
 #
-for_table = mutate(stats,
-                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall'))) %>%
-  select(country, mean, lower, upper, p) %>%
-  rename('p-value' = 'p')
+for_table = mutate(stats_gender,
+        gender = factor(gnum, levels=1:2, labels=glabels),
+        country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall'))) %>%
+  select(country, gender, mean, lower, upper) 
 #
 ftab = flextable(for_table) %>%
   theme_box() %>%
   autofit() %>%
-  colformat_num(2:4, digits=2) %>%
-  colformat_num(5, digits=3) %>%
+  colformat_num(3:4, digits=2) %>%
   merge_v(j=1)
 ftab
 ```  
 
-The p-value is the probability that the odds ratio is less than 1.
-
-
 ### Plot of estimates (gender)
 
 ```{r, fig.width=5, fig.height=5}
-# annotate
-text1 = data.frame(x=8.5, y=1, label='Males more likely', lower=1, upper=1, overall=1)
-text2 = data.frame(x=8.5, y=1, label='Males less likely', lower=1, upper=1, overall=1)
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_gender, 
+                  countrynum = ifelse(gnum==1, countrynum-0.1, countrynum),
+                  countrynum = ifelse(gnum==2, countrynum+0.1, countrynum))
+colours = RColorBrewer::brewer.pal(2, 'Dark2')
 # forest plots
-fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(gnum)))+
   geom_point(size=3)+
-  geom_hline(yintercept=1, lty=2)+ # reference line
   geom_errorbar(width=0, size=1.05)+
-  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
-  theme_bw()+
+  scale_color_manual(NULL, values=colours, labels=glabels)+ # colour overall estimate
   coord_flip()+
   scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
   xlab('')+
-  geom_text(data=text1, aes(x=x, y=y, label=label), adj=-0.1)+
-  geom_text(data=text2, aes(x=x, y=y, label=label), adj=1.1)+
-  ylab('Odds ratio for supporting vaccine donation for males')+
+  theme_bw()+
+  ylab('Probability of supporting vaccine donation')+
   theme(panel.grid.minor = element_blank(),
-        legend.position = 'none')
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm'))
 fplot
 jpeg('figures/gender_donation.jpg', width=4, height=4, units='in', res=500)
 print(fplot)
@@ -291,34 +404,77 @@ invisible(dev.off())
 ```
 
 
+### Tests of overall differences (gender)
+
+Difference for men compared with a reference category of women. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=gnum, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'Male'
+  )) %>%
+  rename('Gender' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+
 # Age
-
-
-### Table of estimates (age)
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
 load('results/bugs_model_age.RData') # from 1_bayes_donation_model_age.R
 
 ## construct probability of supporting vaccine donation from chains
-all_results = process_results(in.results=bugs.results, max.category.num=3) %>%
+all_results = process_results_random(in.results=bugs.results, max.category.num=3) %>%
   rename('age_num' = 'num')
-
 ```
 
+### Fixed versus random model (age)
+
+Here we examine whether the effect of age varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is means the fixed model is better. So there's no evidence that the age effect varies by country. 
 
 ### Table of estimates (age)
 
 ```{r}
 # 
-stats = group_by(all_results, countrynum, overall, age_num) %>%
+stats_age = group_by(all_results, countrynum, overall, age_num) %>%
   summarise(mean = mean(p),
             lower = quantile(p, 0.025), # Bayesian CI
             upper = quantile(p, 1 - 0.025)) %>%
   mutate(age_nice = factor(age_num, levels=1:3, labels=age_labels)) %>%
   ungroup()
 #
-for_table = mutate(stats,
+for_table = mutate(stats_age,
                    country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
                    age = factor(age_num, levels=1:3, labels=age_labels)) %>%
   select(country, age, mean, lower, upper)
@@ -333,26 +489,601 @@ ftab
 
 ### Plot of estimates (age)
 
-```{r, fig.width=7.5, fig.height=6}
+```{r, fig.width=5.5, fig.height=6}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_age, 
+                  countrynum = ifelse(age_num==1, countrynum-0.15, countrynum),
+                  countrynum = ifelse(age_num==3, countrynum+0.15, countrynum))
+colours = RColorBrewer::brewer.pal(3, 'Dark2')
+index = age_labels %in% c('Missing','Unknown')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
 # forest plots
-fplot = ggplot(data=stats, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(overall)))+
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(age_num)))+
   geom_point(size=2)+
   geom_errorbar(width=0, size=1.05)+
-  scale_color_manual(NULL, values=c('dodgerblue','indianred1'))+ # colour overall estimate
+  scale_color_manual('Age group:', values=colours, labels=age_labels)+ # colour 
   theme_bw()+
-  facet_wrap(~age_nice)+
   coord_flip()+
   scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
   xlab('')+
   ylab('Probability of supporting vaccine donation')+
   theme(panel.grid.minor = element_blank(),
-        legend.position = 'none')
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+         )
 fplot
-jpeg('figures/age_donation.jpg', width=5.5, height=4.5, units='in', res=500)
+jpeg('figures/age_donation.jpg', width=4.5, height=5.5, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
 
+### Tests of overall differences (age)
+
+The table shows the differences in the overall probability of a willingness to donate vaccine for the three age groups and the reference group of "Up to 39". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the two groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=age_num, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ '40 to 59',
+    name == 'diff2' ~ '60+'
+  )) %>%
+  rename('Age' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+# Altruism
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_altruism.RData') # from 1_bayes_donation_model_altruism.R
+
+all_results = process_results_random(in.results=bugs.results, max.category.num=3) %>%
+  rename('enum' = 'num')
+```
+
+We created a three category variable for altruism based on the donation amount. The first category combined "missing", "do not know" and "prefer not to answer". The next two categories were "Meagre" which was below the median donation amount for that country, and "Generous" which was on or above the median donation amount for that country. Stratifying by country for this variable is necessary because each country had different amounts and units of currency.
+
+### Fixed versus random model (altruism)
+
+Here we examine whether the effect of altruism varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is strong evidence that the simpler fixed model is better. 
+
+### Table of estimates (altruism)
+
+```{r}
+# 
+stats_altruism = group_by(all_results, countrynum, overall, enum) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
+  mutate(enice = factor(enum, levels=1:3, labels=altruism_labels)) %>%
+  ungroup()
+#
+for_table = mutate(stats_altruism,
+       country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+       altruism = factor(enum, levels=1:3, labels=altruism_labels)) %>%
+  select(country, altruism, mean, lower, upper)
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+
+### Plot of estimates (altruism)
+
+```{r, fig.width=5.5, fig.height=6}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_altruism, 
+                  countrynum = ifelse(enum==1, countrynum-0.15, countrynum),
+                  countrynum = ifelse(enum==3, countrynum+0.15, countrynum))
+colours = RColorBrewer::brewer.pal(3, 'Dark2')
+index = altruism_labels %in% c('Missing','Unknown')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(enum)))+
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual('Altruism:', values=colours, labels=altruism_labels)+ # 
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
+fplot
+jpeg('figures/altruism_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+### Tests of overall differences (altruism)
+
+The table shows the differences in the overall probability of a willingness to donate vaccine for the three altruism groups and the reference group of "Not answered". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the two groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=enum, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'Meagre',
+    name == 'diff2' ~ 'Generous'
+  )) %>%
+  rename('Altruism' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+# Willingness to take risks with health
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_risk.RData') # from 1_bayes_donation_model_risk.R
+
+all_results = process_results_random(in.results=bugs.results, max.category.num=3) %>%
+  rename('enum' = 'num')
+```
+
+This variable was collected on a range of 0 (completely unwilling) to 10 (Very willing), we divided this into two groups defining those with a score of 0 to 5 as "Unwilling" and those with a score of 6 to 10 as "Willing". We added a third group of "Missing". 
+
+### Fixed versus random model (risks with health)
+
+Here we examine whether the effect of taking risks with health varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is strong evidence that the more complex random model is better. 
+
+### Table of estimates (risks with health)
+
+```{r}
+# 
+stats_risk = group_by(all_results, countrynum, overall, enum) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
+  mutate(enice = factor(enum, levels=1:3, labels=risk_labels)) %>%
+  ungroup()
+#
+for_table = mutate(stats_risk,
+       country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+       risk = factor(enum, levels=1:3, labels=risk_labels)) %>%
+  select(country, risk, mean, lower, upper)
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+
+### Plot of estimates (risks with health)
+
+```{r, fig.width=5.5, fig.height=6}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_risk, 
+                  countrynum = ifelse(enum==1, countrynum-0.15, countrynum),
+                  countrynum = ifelse(enum==3, countrynum+0.15, countrynum))
+colours = RColorBrewer::brewer.pal(3, 'Dark2')
+index = risk_labels %in% c('Missing','Unknown')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(enum)))+
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual('Risk:', values=colours, labels=risk_labels)+ # 
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
+fplot
+jpeg('figures/risk_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+
+
+### Tests of overall differences (risks with health)
+
+The table shows the differences in the overall probability of a willingness to donate vaccine for the three risk groups and the reference group of "No answer". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the two groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=enum, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'Unwilling to risk',
+    name == 'diff2' ~ 'Willing to risk'
+  )) %>%
+  rename('Willingness to risk' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+# Income
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_income.RData') # from 1_bayes_donation_model_income.R
+
+all_results = process_results_random(in.results=bugs.results, max.category.num=3) %>%
+  rename('inum' = 'num')
+```
+
+### Fixed versus random model (income)
+
+Here we examine whether the effect of income varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_num(2, digits=1) %>%
+  colformat_num(3, digits=0)
+ftab
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which indicates that the simpler fixed model is better. . 
+
+### Table of estimates (income)
+
+```{r}
+# 
+stats_risk = group_by(all_results, countrynum, overall, inum) %>%
+  summarise(mean = mean(p),
+            lower = quantile(p, 0.025), # Bayesian CI
+            upper = quantile(p, 1 - 0.025)) %>%
+  mutate(enice = factor(inum, levels=1:3, labels=ilabels)) %>%
+  ungroup()
+#
+for_table = mutate(stats_risk,
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   risk = factor(inum, levels=1:3, labels=ilabels)) %>%
+  select(country, risk, mean, lower, upper)
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_num(3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+
+### Plot of estimates (income)
+
+```{r, fig.width=5.5, fig.height=6}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_risk, 
+                  countrynum = ifelse(inum==1, countrynum-0.15, countrynum),
+                  countrynum = ifelse(inum==3, countrynum+0.15, countrynum))
+colours = RColorBrewer::brewer.pal(3, 'Dark2')
+index = ilabels %in% c('Missing','Unknown')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(inum)))+
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual('Income:', values=colours, labels=ilabels)+ # 
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+  )
+fplot
+jpeg('figures/income_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+
+### Tests of overall differences (income)
+
+The table shows the differences in the overall probability of a willingness to donate vaccine for the three risk groups and the reference group of "Low". The Bayesian p-value is the probability that the probability to donate vaccine is higher in each of the two groups compared with the reference group. Hence a very small or large p-value is evidence of a difference, and a p-value close to 0.5 is evidence of little difference between the two groups. 
+
+```{r}
+tests = filter(all_results, countrynum==8) %>%
+  select(-countrynum, -overall, -res, -Var1) %>% # keep chain and index
+  pivot_wider(names_from=inum, values_from=p, names_prefix='p') %>%
+  mutate(diff1 = p2 - p1,
+         diff2 = p3 - p1) %>%
+  pivot_longer(cols=starts_with('diff')) %>%
+  group_by(name) %>%
+  summarise(mean = mean(value),
+            lower = quantile(value, 0.025), # Bayesian CI
+            upper = quantile(value, 1 - 0.025),
+            p = sum(value>0)/n()) %>%
+  ungroup() %>%
+  mutate(name = case_when(
+    name == 'diff1' ~ 'High',
+    name == 'diff2' ~ 'Missing'
+  )) %>%
+  rename('Income' = 'name',
+         'p-value' = 'p')
+ftab = flextable(tests) %>%
+  theme_box() %>%
+  colformat_num(2:4, digits=2) %>%
+  colformat_num(5, digits=3) %>%
+  autofit()
+ftab
+```
+
+
 # Multiple variable model
 
-Here we use a multiple logistic regression model with independent variables of age, sex, education and politics.
+Here we use a multiple logistic regression model with independent variables of age, sex, education, politics, altruism, income and willingness to risk health.
+
+```{r, fig.width=8.5, fig.height=7}
+# uses fixed processing
+load('results/bugs_model_multiple.RData') # from 1_bayes_donation_model_multiple.R
+all_results = process_results_multiple(in.results=bugs.results, max.category.num=16) %>%
+  mutate(label = factor(num, levels=1:16, labels=X_vars),
+         labelc = as.character(label),
+         facet = case_when(
+           str_detect(labelc, '^age_') ~ 'Age',
+           str_detect(labelc, '^e_') ~ 'Education',
+           str_detect(labelc, '^gender_') ~ 'Gender',
+           str_detect(labelc, '^poll_') ~ 'Ideology',
+           str_detect(labelc, '^altruism_') ~ 'Altruism',
+           str_detect(labelc, '^risk_') ~ 'Willingness to risk health',
+           str_detect(labelc, '^income_') ~ 'Income',
+           str_detect(labelc, 'intercept') ~ 'Intercept',
+         ))
+# get intercepts
+not_intercepts = filter(all_results, facet !='Intercept')
+intercepts = filter(all_results, facet=="Intercept") %>%
+  select(countrynum, index, p) %>%
+  rename('intercept' = 'p')
+not_intercepts = left_join(not_intercepts, intercepts, by=c('countrynum','index')) %>%
+  mutate(diff = p - intercept) # difference in probability
+# get statistics using chains
+stats_mult = group_by(not_intercepts, countrynum, overall, label, facet) %>%
+  summarise(mean = mean(diff),
+            lower = quantile(diff, 0.025), # Bayesian CI
+            upper = quantile(diff, 1 - 0.025)) %>%
+#  mutate(age_nice = factor(age_num, levels=1:3, labels=age_labels)) %>%
+  ungroup()
+# prepare for plot using jittering
+for_plot = mutate(stats_mult,
+                  # age
+                  countrynum = ifelse(label=='age_mid', countrynum+0.2, countrynum),
+                  countrynum = ifelse(label=='age_old', countrynum-0.2, countrynum),
+                  # altruism
+                  countrynum = ifelse(label=='altruism_generous', countrynum+0.2, countrynum),
+                  countrynum = ifelse(label=='altruism_noanswer', countrynum-0.2, countrynum),
+                  # income
+                  countrynum = ifelse(label=='income_high', countrynum+0.2, countrynum),
+                  countrynum = ifelse(label=='income_missing', countrynum-0.2, countrynum),
+                  # risk
+                  countrynum = ifelse(label=='risk_willing', countrynum+0.2, countrynum),
+                  countrynum = ifelse(label=='risk_missing', countrynum-0.2, countrynum),
+                  # education
+                  countrynum = ifelse(label=='e_uni', countrynum-0.3, countrynum),
+                  countrynum = ifelse(label=='e_unknown', countrynum+0.3, countrynum),
+                  # ideology
+                  countrynum = ifelse(label=='poll_right', countrynum-0.3, countrynum),
+                  countrynum = ifelse(label=='poll_missing', countrynum+0.3, countrynum))
+# text for reference lines
+ref_text = read.table(header=T, sep=',', text='
+facet,reflabel
+Gender,Not male
+Age,Young
+Education,Primary
+Ideology,Left
+Altruism,Meagre
+Income,Low
+Willingness to risk health,Unwilling
+') %>%
+  mutate(x=8.9, y=0, ymin=0, ymax=0, label=1) # 8.9 puts labels the bottom
+# text to label points
+points_text = filter(for_plot, overall==2) %>%
+  mutate(reflabel = case_when(
+    label == 'gender_male' ~ 'Male',
+    label == 'e_secondary' ~ 'Secondary',
+    label == 'e_uni' ~ 'University',
+    label == 'e_unknown' ~ 'Missing',
+    label == 'age_mid' ~ 'Middle',
+    label == 'age_old' ~ 'Old',
+    label == 'poll_central' ~ 'Centre',
+    label == 'poll_right' ~ 'Right',
+    label == 'poll_missing' ~ 'Missing',
+    label == 'altruism_generous' ~ 'Generous',
+    label == 'altruism_noanswer' ~ 'Missing',
+    label == 'risk_missing' ~ 'Missing',
+    label == 'risk_willing' ~ 'Willing',
+    label == 'income_high' ~ 'High',
+    label == 'income_missing' ~ 'Missing')
+  ) 
+palette = c(brewer.pal(4, 'Dark2'), missing_colour)
+# colours, same for missing
+colours = palette[c(1,1,2,5,1,2,1,2,5,5,1,5,1,2,5,2)]
+# forest plots
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(label)))+
+  geom_hline(lty=2, yintercept = 0, col='dark grey')+
+  geom_label(data=ref_text, aes(x=x, y=y, ymin=ymin, ymax=ymax, label=reflabel), col='dark grey')+
+  geom_text(data=points_text, aes(x=countrynum, y=lower, ymin=lower, ymax=lower, col=factor(label), label=reflabel), hjust = 1.1)+ # hjust puts labels on left
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=colours)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Difference in the probability of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        text = element_text(size=14),
+        legend.position = 'none',
+        legend.box.spacing = unit(0, 'mm') # reduce space between plot and legend
+#         legend.box.margin	= margin(t=0, r=0, b=0, l=0) # reduce space around legend
+#         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+         )+
+  facet_wrap(~facet, nrow=2)
+fplot
+jpeg('figures/multiple.jpg', width=8.5, height=6.5, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+## to here
+# check that CIs correspond with estimates of alphas
+```
+
+The plot shows the difference in the probability of supporting donation for the four independent variables. The difference is from the reference group which is the vertical dotted line at zero.
+
+# Those with a missing ideology
+
+In this section we look at those with a missing ideology.
+
+## Responses to willingness to donate 
+
+```{r}
+# add missing category
+data = mutate(data, Missing = as.numeric(is.na(ideology)),
+                    Missing = factor(Missing, levels=0:1, labels=c('No','Yes')))
+# stats by country and missing
+stats_miss = group_by(data, country, Missing, donateany) %>%
+  tally() %>%
+  group_by(country, Missing) %>%
+  mutate(percent = round(prop.table(n)*100),
+         cell = paste(n, ' (', percent, ')', sep='')) %>%
+  select(country, Missing, donateany, cell) %>%
+  pivot_wider(names_from = donateany, values_from = cell) %>%
+  rename(`Not willing` = `0`,
+         `Willing` = `1`)
+ftab = flextable(stats_miss) %>%
+  theme_box() %>%
+  autofit()
+ftab
+```
+
+The table shows the numbers and percents that are willing or not to donate the vaccine. The results are stratified by country and whether the ideology was missing or not. 
+
+The interesting comparison is to look at the percent willing in each country for those with missing ideology or not. In every country the percent willing to donate the vaccine is much lower in those who did not answer the ideology question.
+
+## Lottery vignette
+
+The histogram below shows the answers to the lottery vignette for those with a missing ideology or not. 
+
+```{r, fig.width=7}
+#
+stats = mutate(data, 
+               vmissing = as.numeric(is.na(lottery_vignette)) + 1,
+               lottery_group = floor(lottery_vignette/5),
+               lottery_group = ifelse(is.na(lottery_vignette)==TRUE, 21, lottery_group)) %>% # extra group for missing
+  group_by(lottery_group, vmissing, Missing) %>%
+  tally() %>%
+  group_by(Missing) %>%
+  mutate(percent = 100*prop.table(n),
+         floor = lottery_group*5) %>%
+  ungroup() %>%
+  mutate(facet = ifelse(Missing=='Yes', 'Ideology missing', 'Ideology complete'))
+#
+gplot = ggplot(data=stats, aes(x=floor, ymin=0, ymax=percent, col=factor(vmissing)))+
+  geom_linerange(size=3)+
+  scale_color_manual('Lottery\nvignette\nmissing', labels=c('No','Yes'), values=c('dodgerblue','goldenrod'))+
+  xlab('Agree that this lottery method is appropriate')+
+  ylab('Percent')+
+  theme_bw()+
+  facet_wrap(~ facet, scales='free_y')
+gplot
+```
+
+The percent who skipped the lottery vignette is much higher in the percent that also skipped the ideology question.
+
+
+# References
