@@ -156,7 +156,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
          legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
         )
 fplot
-jpeg('figures/education_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+jpeg('figures/education_donation.jpg', width=5.5, height=6, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
@@ -632,7 +632,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
          legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
         )
 fplot
-jpeg('figures/altruism_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+jpeg('figures/altruism_donation.jpg', width=5.5, height=6, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
@@ -750,7 +750,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
          legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
         )
 fplot
-jpeg('figures/risk_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+jpeg('figures/risk_donation.jpg', width=5.5, height=6, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
@@ -814,7 +814,7 @@ ftab = flextable(dic_table) %>%
 ftab
 ```
 
-pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which indicates that the simpler fixed model is better. . 
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which indicates that the simpler fixed model is better. 
 
 ### Table of estimates (income)
 
@@ -868,7 +868,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
   )
 fplot
-jpeg('figures/income_donation.jpg', width=5.5, height=6.5, units='in', res=500)
+jpeg('figures/income_donation.jpg', width=5.5, height=6, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
@@ -1016,7 +1016,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
          )+
   facet_wrap(~facet, nrow=2)
 fplot
-jpeg('figures/multiple.jpg', width=8.5, height=6.5, units='in', res=500)
+jpeg('figures/multiple.jpg', width=8.5, height=7, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ## to here

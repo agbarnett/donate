@@ -10,10 +10,10 @@ library(R2WinBUGS)
 # get the data
 load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
 
-# plot raw data
-summary = group_by(data, income) %>%
+# plot raw data as quick check
+summary = group_by(data, incomecat) %>%
   summarise(mean = mean(donateany)) 
-eplot = ggplot(data=summary, aes(x=income, y=mean))+
+eplot = ggplot(data=summary, aes(x=incomecat, y=mean))+
   geom_point()+
   theme_bw()+
   coord_flip()
@@ -21,7 +21,7 @@ eplot
 
 ## set up the data as a matrix
 small = select(data, donateany, country) # other variables to not add to contrast matrix
-formula = 'donateany ~ -1 + income'
+formula = 'donateany ~ -1 + incomecat'
 for.model = data.frame(model.matrix(as.formula(formula), data=data))
 names(for.model) = c('i_low','i_high','i_missing')
 for.model = bind_cols(for.model, small) %>%

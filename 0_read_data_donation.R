@@ -9,6 +9,26 @@ source('99_functions.R') #
 
 # list of countries for this analysis:
 countries = c('Australia','Canada','France','Italy','Spain','UK','US')
+
+# income data from larry
+income = haven::read_dta('data/Income_from_Larry.dta') %>%
+  select(id_country, country_string, age, hhequivinc) %>% # just keep household equivalent income
+  rename('id' = 'id_country',
+         'country' = 'country_string',
+         'age_check' = 'age') # for checking merge
+# make per country median for income
+medians = group_by(income, country) %>%
+  summarise(medinc = median(hhequivinc, na.rm=TRUE)) %>%
+  ungroup()
+income = left_join(income, medians, by='country') %>%
+  mutate(incomecat = case_when(
+    is.na(hhequivinc)==TRUE  ~ 3,
+    hhequivinc < medinc ~ 1,
+    hhequivinc >= medinc ~ 2
+  ),
+  incomecat = factor(incomecat, levels=1:3, labels=c('low','high','missing')))
+  
+
 # from github https://github.com/CANDOUR-COVID/survey_data
 raw = read.csv('data/CANDOUR.csv', stringsAsFactors = FALSE)
 # used data management code in do file in stata folder
@@ -30,6 +50,9 @@ data = raw %>%
   filter(age <= 105,
          age >= 16 )
 # primary outcome, any versus none donation; this groups together 'should not donate' with "Prefer not to say" and "Do not know" 
+## add income data
+data = left_join(data, income, by=c('country','id')) %>%
+  select(-age_check) # not needed as merge is fine
 
 ## make categorical altruism variable
 # first get median donation per country

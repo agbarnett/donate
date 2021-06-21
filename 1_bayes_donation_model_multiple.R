@@ -31,7 +31,7 @@ data = mutate(data,
 
 ## set up the data as a matrix, do not use missing as reference category
 small = select(data, donateany, country, countrynum) # other variables to not add to contrast matrix
-formula = 'donateany ~ 1 + factor(male) + factor(education_level) + factor(age_group) + factor(politics) + risk_group + altruism + income' # altruism and income are already factors
+formula = 'donateany ~ 1 + factor(male) + factor(education_level) + factor(age_group) + factor(politics) + risk_group + altruism + incomecat' # altruism and income are already factors
 for.model = data.frame(model.matrix(as.formula(formula), data=data))
 X_vars = c('intercept','gender_male','e_secondary','e_uni','e_unknown','age_mid','age_old','poll_central','poll_right','poll_missing','risk_missing','risk_willing','altruism_noanswer','altruism_generous','income_high','income_missing') # without reference groups
 names(for.model) = X_vars
@@ -118,4 +118,4 @@ data = select(for.model, 'donateany', starts_with('gender_'), starts_with('e_'),
 names = names(data)
 formula = paste(names[1], '~', paste(names[-1], collapse='+'))
 full_model = glm(formula, data=data, family='binomial')
-VIF(full_model)
+car::vif(full_model)
