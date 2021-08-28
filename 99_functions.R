@@ -34,30 +34,30 @@ for (countrynum in 1:n.country){
   index1 = grep(paste('^alpha\\[', countrynum, sep=''), names) # locations of the alpha's for this country
   indexi = grep(paste(',', 1 ,'\\]', sep=''), names) # intercept locations
   i = intersect(index1, indexi) # location of intercept for this country
-  c1 = bugs.results$sims.array[,1,i] # chain 1  
-  c2 = bugs.results$sims.array[,2,i] # chain 2
+  c1 = in.results$sims.array[,1,i] # chain 1  
+  c2 = in.results$sims.array[,2,i] # chain 2
   frame = data.frame(countrynum = countrynum, num = 1, res=c(c1, c2), index=1:(length(c1)*2))
   all_results = bind_rows(all_results, frame)
   # other category levels
   for (num in 2:max.category.num){
     index2 = grep(paste(',', num ,'\\]', sep=''), names) # locations of these category levels
     u = intersect(index1, index2) # location of category (alpha + num)
-    c1 = bugs.results$sims.array[,1,i] + bugs.results$sims.array[,1,u] # chain 1  
-    c2 = bugs.results$sims.array[,2,i] + bugs.results$sims.array[,2,u] # chain 2
+    c1 = in.results$sims.array[,1,i] + in.results$sims.array[,1,u] # chain 1  
+    c2 = in.results$sims.array[,2,i] + in.results$sims.array[,2,u] # chain 2
     frame = data.frame(countrynum = countrynum, num = num, res=c(c1, c2), index=1:(length(c1)*2))
     all_results = bind_rows(all_results, frame)
   }
 }
 # now add the overall means
 indexi = grep('^mu.alpha\\[1\\]', names) # mean alpha for intercept
-c1 = bugs.results$sims.array[,1,indexi] # chain 1  
-c2 = bugs.results$sims.array[,2,indexi] # chain 2
+c1 = in.results$sims.array[,1,indexi] # chain 1  
+c2 = in.results$sims.array[,2,indexi] # chain 2
 frame = data.frame(countrynum = n.country+1, num = 1, res=c(c1, c2), index=1:(length(c1)*2)) # country number is + 1
 all_results = bind_rows(all_results, frame)
 for (num in 2:max.category.num){
   index2 = grep(paste('^mu.alpha\\[', num, '\\]', sep=''), names) # mean alpha for other questions
-  c1 = bugs.results$sims.array[,1,indexi] + bugs.results$sims.array[,1,index2] # chain 1  
-  c2 = bugs.results$sims.array[,2,indexi] + bugs.results$sims.array[,2,index2] # chain 2
+  c1 = in.results$sims.array[,1,indexi] + in.results$sims.array[,1,index2] # chain 1  
+  c2 = in.results$sims.array[,2,indexi] + in.results$sims.array[,2,index2] # chain 2
   frame = data.frame(countrynum = n.country+1, num = num, res=c(c1, c2), index=1:(length(c1)*2))
   all_results = bind_rows(all_results, frame)
 }
@@ -72,49 +72,108 @@ return(all_results)
 
 
 # function to process results from winbugs (version for random model)
-process_results_random = function(in.results, max.category.num=3){
+process_results = function(in.results.random,
+                           in.results.fixed,
+                           max.category.num = 3){
   
+  ### random estimates ###
   ## construct probability of supporting vaccine donation from chains
-  names = names(in.results$sims.array[1,1,]) # names of all the stored results
-  index = grep('^alpha\\[', names) # locations of the alpha's for this country
-  c1 = bugs.results$sims.array[,1,index] # chain 1  
-  c2 = bugs.results$sims.array[,2,index] # chain 2
+  names = names(in.results.random$sims.array[1,1,]) # names of all the stored results
+  index = grep('^alpha\\[', names) # locations of the alpha's for countries
+  c1 = in.results.random$sims.array[,1,index] # chain 1  
+  c2 = in.results.random$sims.array[,2,index] # chain 2
   long1 = reshape2::melt(c1)
   long2 = reshape2::melt(c2)
   chains = bind_rows(long1, long2, .id='chain') %>%
-    mutate(Var2 = str_remove_all(Var2, "[^0-9|,]")) %>%
+    mutate(node = str_remove_all(Var2, "[^a-z]"),
+           Var2 = str_remove_all(Var2, "[^0-9|,]")) %>%
     separate(Var2, c('countrynum','num'), sep=',') %>%
     mutate(index = as.numeric(Var1),
            countrynum = as.numeric(countrynum),
            num = as.numeric(num))
   # now add the overall means
   indexi = grep('^mu.alpha\\[', names) # mean alpha for intercept
-  c1 = bugs.results$sims.array[,1,indexi] # chain 1  
-  c2 = bugs.results$sims.array[,2,indexi] # chain 2
+  c1 = in.results.random$sims.array[,1,indexi] # chain 1  
+  c2 = in.results.random$sims.array[,2,indexi] # chain 2
   long1 = reshape2::melt(c1)
   long2 = reshape2::melt(c2)
   o_chains = bind_rows(long1, long2, .id='chain') %>%
-    mutate(
-      index = 1:(length(c1)*2),
+    mutate(node = str_remove_all(Var2, "[^a-z]"),
+           index = 1:(length(c1)*2),
       countrynum = n.country+1,
       Var2 = as.numeric(str_remove_all(Var2, "[^0-9|,]"))) %>%
     rename('num' = 'Var2') %>%
     mutate(index = as.numeric(Var1),
            num = as.numeric(num))
   # 
-  all_results = bind_rows(chains, o_chains) %>%
+  random_results = bind_rows(chains, o_chains) %>%
     rename('res' = 'value') %>% # to match other function
-                mutate(p = inv.logit(res), # inverse logit to get probability
-                       overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+    mutate('type' = 'random',
+           p = inv.logit(res), # inverse logit to get probability
+           overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+  
+  ### fixed estimates ###
+  ## construct probability of supporting vaccine donation from chains
+  names = names(in.results.fixed$sims.array[1,1,]) # names of all the stored results
+  index = grep('^alpha\\[', names) # locations of the alpha's for this country
+  c1 = in.results.fixed$sims.array[,1,index] # chain 1  
+  c2 = in.results.fixed$sims.array[,2,index] # chain 2
+  long1 = reshape2::melt(c1)
+  long2 = reshape2::melt(c2)
+  chains = bind_rows(long1, long2, .id='chain') %>%
+    mutate(num = 1, # intercept
+           node = str_remove_all(Var2, "[^a-z]"),
+           Var2 = str_remove_all(Var2, "[^0-9|,]"), 
+           index = as.numeric(Var1),
+           countrynum = as.numeric(Var2)) %>%
+    select(-starts_with('Var'))
+  # beta
+  index = grep('^beta\\[', names) # locations of the beta's
+  c1 = in.results.fixed$sims.array[,1,index] # chain 1  
+  c2 = in.results.fixed$sims.array[,2,index] # chain 2
+  long1 = reshape2::melt(c1)
+  long2 = reshape2::melt(c2)
+  chains_beta = bind_rows(long1, long2, .id='chain') %>%
+    mutate(node = str_remove_all(Var2, "[^a-z]"),
+           Var2 = str_remove_all(Var2, "[^0-9|,]"), 
+           index = as.numeric(Var1),
+           num = as.numeric(Var2)) %>%
+    select(-starts_with('Var'))
+  # add zero value for intercept
+  zero = select(chains_beta, chain, index, node) %>%
+    unique() %>%
+    mutate(num = 0, value = 0)
+  chains_beta = bind_rows(chains_beta, zero)
+  # combine
+  both = full_join(chains, chains_beta, by=c('chain','index')) %>% # repeats all values of beta across alpha
+    mutate(num = num.x + num.y,
+           value = value.x + value.y) %>%
+    select(chain, index, num, countrynum, value)
+  
+  # now make the overall means
+  o_chains = group_by(both, chain, index, num) %>%
+    mutate(value = mean(value), # average across countries
+           countrynum = n.country + 1) %>%
+    ungroup()
+  # 
+  fixed_results = bind_rows(both, o_chains) %>%
+    rename('res' = 'value') %>% # to match other function
+    mutate('type' = 'fixed',
+           p = inv.logit(res), # inverse logit to get probability
+           overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+  
+  # combine fixed and random
+  all_results = bind_rows(fixed_results, random_results) 
   
   return(all_results)
   
 } # end of function
 
-# lasso function to run lots of outcomes
+# lasso function to run multiple outcomes
 lasso_this = function(indata, # data sets
                       expand = 0.1, # for creating space for labels on plot (just give right hand side); multiplier
                       family = 'binomial', # glm family
+                      gtitle = '', # title for graph
                       outcome, # outcome variable 
                       o_levels, # outcome levels class as 'yes'
                       predictors # list of predictor variables
@@ -140,10 +199,10 @@ lasso_this = function(indata, # data sets
   # coefficients
   beta = coef(cv.lasso, s='lambda.1se')
   
-  # refit best model using standard model for CIs
+  # refit best model using standard model to give CIs
   update_vars_to_include = row.names(beta)[which(beta!=0)]
   X.dash = X[, colnames(X) %in% update_vars_to_include]
-  standard_model = glm(y~X.dash)
+  standard_model = glm(y~X.dash, family=family)
   # tidy estimates
   standard_model_ests= broom::tidy(standard_model, conf.int=TRUE) %>%
     mutate(term = str_remove(string=term, pattern='X.dash'))
@@ -172,7 +231,74 @@ lasso_this = function(indata, # data sets
       term != '(Intercept)') %>% # do not need intercept
   rename('Variable' = 'term')
     
-  ## make plot
+  ## refit best model with country-specific ideology
+  # add country-by-ideology interaction to X.dash
+  which_ideology = which(str_detect(colnames(X.dash), pattern='^ideology')) # which ideology variables were in the model
+  which_country = which(str_detect(colnames(X.dash), pattern='^country')) # which countries variables were in the model
+  X.dash.plus = X.dash
+  for (i in which_ideology){
+    for (j in which_country){
+      if(str_detect(colnames(X.dash)[j], pattern='China') == FALSE){ # do not add China as ideology not collected
+        X = as.matrix(X.dash[,i] * X.dash[,j]) # make interaction
+        colnames(X) = paste(colnames(X.dash)[i], colnames(X.dash)[j], sep='')
+        X.dash.plus = cbind(X.dash.plus, X)
+      }
+    }
+  }
+  standard_model_plus = glm(y~X.dash.plus, family=family)
+  # extract means and confidence intervals for country effects
+  ests = standard_model_plus$coefficients
+  vcov = vcov(standard_model_plus)
+  names = names(ests)
+  names = str_remove_all(names, pattern='^X.dash.plus')
+  which_ideology = names[str_detect(names, pattern='ideology')] # ideology names
+  which_country = names[str_detect(names, pattern='country')] # country names
+  countries = str_remove_all(names[str_detect(names,'^country')], '^country')
+  countries = countries[countries !='China'] # ideology not measured in China
+  ideologies = str_remove_all(names[str_detect(names,'^ideology')], '^ideology')
+  ideologies = ideologies[!str_detect(ideologies, 'country')]
+  interaction_estimates = NULL
+  for (this_country in countries){
+    for (this_ideology in ideologies){
+      search1 = paste(c('^country', this_country, "$"), collapse='') 
+      search2 = paste('ideology', this_ideology , '$', sep='') # needed because of 1 or 10
+      search3 = paste(c('ideology', this_ideology, 'country', this_country), collapse='')
+      to_detect = paste(c(search1, search2, search3), collapse='|')
+      index = which(str_detect(names, to_detect))
+      coef = sum(ests[index])
+      var = sum(vcov[index,index])
+      frame = data.frame(country =this_country, ideology=this_ideology, est = coef, var = var)
+      interaction_estimates = bind_rows(interaction_estimates, frame)
+    }
+  }
+  # make confidence intervals and prepare for plot
+  interaction_estimates_plot = filter(interaction_estimates, ideology !='Missing') %>% # exclude missing
+    mutate(ideology = as.numeric(ideology),
+                                 z = qnorm(0.975),
+                                 lower = est - (z*sqrt(var)),
+                                 upper = est + (z*sqrt(var)),
+                                 x = as.numeric(factor(country))) %>%
+    arrange(x, ideology) %>%
+    group_by(country) %>%
+    mutate(jitter = (1:n() - 0.5 - (n()/2))/(2*n()), # jitter x-axis position to avoid overlap
+           xj = x + jitter) %>%
+    select(-z,  -jitter) %>%
+    filter(var <= 100) %>% # exclude crazy estimates
+    ungroup()
+  if(family == 'binomial'){ # extra step for binomial
+    interaction_estimates_plot = mutate(interaction_estimates_plot,
+                                 est = exp(est), # make odds ratios
+                                 lower = exp(lower),
+                                 upper = exp(upper))
+  }
+  
+  # colours:
+  palette_int = brewer.pal(10, 'RdBu') # palette for ideology (red to blue)
+  ideology_num = as.numeric(ideologies)
+  ideology_num = ideology_num[order(ideology_num)]
+  palette_int =palette_int[ideology_num]
+  
+  ## make plot for main estimates
   # prepare data
   for_plot = arrange(standard_model_ests, estimate) %>%
              mutate(colour = case_when(
@@ -185,8 +311,11 @@ lasso_this = function(indata, # data sets
               str_detect(Variable, pattern='willing_risk')==TRUE ~ 7,
               is.character(Variable)==TRUE ~ 8
             ),
+            gtitle = gtitle,
+            outcome = outcome,
             colour = factor(colour, levels=1:8),
-            x=1:n())
+            x=1:n()) %>%
+    select(-std.error, -statistic, -p.value) # slim down
   N = nrow(for_plot)
   ## labels and colours
   # start with full colours and labels then slim down (gives consistent order and colour across plots)
@@ -214,9 +343,10 @@ lasso_this = function(indata, # data sets
     geom_text(data=text2, aes(x=x, y=y, label =label), adj=1.1, vjust=1, col=grey(0.5))+
     geom_text(data=est_labels, aes(x=x, y=upper, label =label, col=colour), adj=0, show.legend = FALSE)+
     coord_flip()+
+    ggtitle(gtitle)+
     theme_bw()+
     theme(
-        legend.position = 'top',
+        legend.position = 'bottom',
         legend.justification = 'left',
         legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
         legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
@@ -225,18 +355,58 @@ lasso_this = function(indata, # data sets
     xlab('')
   plot
   
-  # rename for table
+  # just for binomial
   if(family=='binomial'){
+    # rename for table
     standard_model_ests = rename(standard_model_ests, 'OR' = 'estimate')
+  
+    # truncate at upper limit and add arrows for upper limit
+    upper_or_limit = 10
+    interaction_estimates_plot = mutate(interaction_estimates_plot, 
+                                        est = ifelse(est > upper_or_limit, upper_or_limit, est),
+                                        upper = ifelse(upper > upper_or_limit, upper_or_limit, upper))
+    add_arrows = filter(interaction_estimates_plot, upper == upper_or_limit)
+    
   }
   
-  # return
+  ## make plot for interaction estimates
+  plot_interaction = ggplot(data=interaction_estimates_plot, aes(x=xj, y=est, ymin=lower, ymax=upper, col=factor(ideology)))+
+    scale_x_continuous(breaks=1:length(countries), labels=countries, expand=expansion(mult = c(0.035, 0.015)))+ # narrow white space
+    scale_y_continuous(expand = expansion(mult = c(0.005, expand)))+ # add space on right for labels
+    scale_color_manual('Ideology', values=palette_int, labels=ideology_num)+
+    geom_hline(lty=2, yintercept=yref, col='gray33')+
+    geom_point(size=2, shape=19)+
+    geom_errorbar(width=0, size=1.02)+
+    geom_text(data=text1, aes(x=x, y=y, label =label), adj=-0.1, vjust=1, col=grey(0.5))+
+    geom_text(data=text2, aes(x=x, y=y, label =label), adj=1.1, vjust=1, col=grey(0.5))+
+    coord_flip( )+ # truncate at OR of 10
+    ggtitle(gtitle)+
+    theme_bw()+
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = 'bottom',
+      legend.justification = 'left',
+      legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+      legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+      legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm'))+
+    ylab(ylab)+
+    xlab('')
+  if(family == 'binomial'){ # only for binomial
+    if(nrow(add_arrows)> 0){ # only if there are some over the limit
+      plot_interaction = plot_interaction +
+        geom_segment(data=add_arrows, arrow = arrow(length = unit(0.03, "npc")), aes(x=xj, xend=xj, y=upper_or_limit-1, yend=upper_or_limit, col=factor(ideology))) # arrow for upper limit
+    }
+  }
+    
+  ## return
   to.return = list()
   to.return$N = nrow(X)
   to.return$lasso = lasso
   to.return$cv.lasso = cv.lasso
   to.return$standard_model_ests = standard_model_ests
+  to.return$for_plot = for_plot
   to.return$plot = plot
+  to.return$plot_interaction = plot_interaction
   return(to.return)
   
 }
