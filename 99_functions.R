@@ -1,6 +1,6 @@
 # 99_functions.R
 # functions for vaccine survey
-# June 2021
+# Sep 2021
 
 # makes nice labels for table / plot
 nice.label = function(intext){
@@ -25,13 +25,15 @@ nice.label = function(intext){
 }
 
 # function to process results from winbugs (version for multiple variable model with intercept)
-process_results_multiple = function(in.results, max.category.num=3){
+process_results_multiple = function(in.results, max.category.num=3, ordinal = FALSE){
 
 ## construct probability of supporting vaccine donation from chains
 names = names(in.results$sims.array[1,1,]) # names of all the stored results
+parm = ifelse(ordinal == TRUE, 'beta', 'alpha') # different names for ordinal and logistic models
+
 all_results = NULL
 for (countrynum in 1:n.country){
-  index1 = grep(paste('^alpha\\[', countrynum, sep=''), names) # locations of the alpha's for this country
+  index1 = grep(paste('^', parm, '\\[', countrynum, sep=''), names) # locations of the alpha's for this country
   indexi = grep(paste(',', 1 ,'\\]', sep=''), names) # intercept locations
   i = intersect(index1, indexi) # location of intercept for this country
   c1 = in.results$sims.array[,1,i] # chain 1  
@@ -42,28 +44,45 @@ for (countrynum in 1:n.country){
   for (num in 2:max.category.num){
     index2 = grep(paste(',', num ,'\\]', sep=''), names) # locations of these category levels
     u = intersect(index1, index2) # location of category (alpha + num)
-    c1 = in.results$sims.array[,1,i] + in.results$sims.array[,1,u] # chain 1  
-    c2 = in.results$sims.array[,2,i] + in.results$sims.array[,2,u] # chain 2
+    if(ordinal==FALSE){ # add intercept
+      c1 = in.results$sims.array[,1,i] + in.results$sims.array[,1,u] # chain 1  
+      c2 = in.results$sims.array[,2,i] + in.results$sims.array[,2,u] # chain 2
+    }
+    if(ordinal==TRUE){ # do not add intercept
+      c1 = in.results$sims.array[,1,u] # chain 1  
+      c2 = in.results$sims.array[,2,u] # chain 2
+    }
     frame = data.frame(countrynum = countrynum, num = num, res=c(c1, c2), index=1:(length(c1)*2))
     all_results = bind_rows(all_results, frame)
   }
 }
 # now add the overall means
-indexi = grep('^mu.alpha\\[1\\]', names) # mean alpha for intercept
+indexi = grep(paste('^mu.', parm, '\\[1\\]', sep=''), names) # mean alpha/beta for intercept
 c1 = in.results$sims.array[,1,indexi] # chain 1  
 c2 = in.results$sims.array[,2,indexi] # chain 2
 frame = data.frame(countrynum = n.country+1, num = 1, res=c(c1, c2), index=1:(length(c1)*2)) # country number is + 1
 all_results = bind_rows(all_results, frame)
 for (num in 2:max.category.num){
-  index2 = grep(paste('^mu.alpha\\[', num, '\\]', sep=''), names) # mean alpha for other questions
-  c1 = in.results$sims.array[,1,indexi] + in.results$sims.array[,1,index2] # chain 1  
-  c2 = in.results$sims.array[,2,indexi] + in.results$sims.array[,2,index2] # chain 2
+  index2 = grep(paste('^mu.', parm, '\\[', num, '\\]', sep=''), names) # mean alpha for other questions
+  if(ordinal==FALSE){ # add intercept
+    c1 = in.results$sims.array[,1,indexi] + in.results$sims.array[,1,index2] # chain 1  
+    c2 = in.results$sims.array[,2,indexi] + in.results$sims.array[,2,index2] # chain 2
+  }
+  if(ordinal==TRUE){ # do not add intercept
+    c1 = in.results$sims.array[,1,index2] # chain 1  
+    c2 = in.results$sims.array[,2,index2] # chain 2
+  }
   frame = data.frame(countrynum = n.country+1, num = num, res=c(c1, c2), index=1:(length(c1)*2))
   all_results = bind_rows(all_results, frame)
 }
+
+if(ordinal==FALSE){
+  all_results = mutate(all_results, 
+                         p = inv.logit(res)) # inverse logit to get probability for logistic model
+}
+
 # 
 all_results = mutate(all_results,
-                     p = inv.logit(res), # inverse logit to get probability
                      overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
 
 return(all_results)
@@ -74,12 +93,13 @@ return(all_results)
 # function to process results from winbugs (version for random model)
 process_results = function(in.results.random,
                            in.results.fixed,
-                           max.category.num = 3){
-  
+                           ordinal = FALSE){ # false for logistic model
+
   ### random estimates ###
   ## construct probability of supporting vaccine donation from chains
   names = names(in.results.random$sims.array[1,1,]) # names of all the stored results
-  index = grep('^alpha\\[', names) # locations of the alpha's for countries
+  parm = ifelse(ordinal == TRUE, 'beta', 'alpha') # different names for ordinal and logistic models
+  index = grep(paste('^', parm, '\\[', sep=''), names) # locations of the alpha's for countries
   c1 = in.results.random$sims.array[,1,index] # chain 1  
   c2 = in.results.random$sims.array[,2,index] # chain 2
   long1 = reshape2::melt(c1)
@@ -92,7 +112,7 @@ process_results = function(in.results.random,
            countrynum = as.numeric(countrynum),
            num = as.numeric(num))
   # now add the overall means
-  indexi = grep('^mu.alpha\\[', names) # mean alpha for intercept
+  indexi = grep(paste('^mu.', parm,'\\[', sep=''), names) # mean alpha for intercept
   c1 = in.results.random$sims.array[,1,indexi] # chain 1  
   c2 = in.results.random$sims.array[,2,indexi] # chain 2
   long1 = reshape2::melt(c1)
@@ -115,7 +135,7 @@ process_results = function(in.results.random,
   ### fixed estimates ###
   ## construct probability of supporting vaccine donation from chains
   names = names(in.results.fixed$sims.array[1,1,]) # names of all the stored results
-  index = grep('^alpha\\[', names) # locations of the alpha's for this country
+  index = grep(paste('^', parm, '\\[', sep=''), names) # locations of the alpha's for this country
   c1 = in.results.fixed$sims.array[,1,index] # chain 1  
   c2 = in.results.fixed$sims.array[,2,index] # chain 2
   long1 = reshape2::melt(c1)
@@ -127,28 +147,33 @@ process_results = function(in.results.random,
            index = as.numeric(Var1),
            countrynum = as.numeric(Var2)) %>%
     select(-starts_with('Var'))
-  # beta
-  index = grep('^beta\\[', names) # locations of the beta's
-  c1 = in.results.fixed$sims.array[,1,index] # chain 1  
-  c2 = in.results.fixed$sims.array[,2,index] # chain 2
-  long1 = reshape2::melt(c1)
-  long2 = reshape2::melt(c2)
-  chains_beta = bind_rows(long1, long2, .id='chain') %>%
-    mutate(node = str_remove_all(Var2, "[^a-z]"),
-           Var2 = str_remove_all(Var2, "[^0-9|,]"), 
-           index = as.numeric(Var1),
-           num = as.numeric(Var2)) %>%
-    select(-starts_with('Var'))
-  # add zero value for intercept
-  zero = select(chains_beta, chain, index, node) %>%
-    unique() %>%
-    mutate(num = 0, value = 0)
-  chains_beta = bind_rows(chains_beta, zero)
-  # combine
-  both = full_join(chains, chains_beta, by=c('chain','index')) %>% # repeats all values of beta across alpha
-    mutate(num = num.x + num.y,
-           value = value.x + value.y) %>%
-    select(chain, index, num, countrynum, value)
+  # beta (just for logistic)
+  if(ordinal == FALSE){
+    index = grep('^beta\\[', names) # locations of the beta's
+    c1 = in.results.fixed$sims.array[,1,index] # chain 1  
+    c2 = in.results.fixed$sims.array[,2,index] # chain 2
+    long1 = reshape2::melt(c1)
+    long2 = reshape2::melt(c2)
+    chains_beta = bind_rows(long1, long2, .id='chain') %>%
+      mutate(node = str_remove_all(Var2, "[^a-z]"),
+             Var2 = str_remove_all(Var2, "[^0-9|,]"), 
+             index = as.numeric(Var1),
+             num = as.numeric(Var2)) %>%
+      select(-starts_with('Var'))
+    # add zero value for intercept
+    zero = select(chains_beta, chain, index, node) %>%
+      unique() %>%
+      mutate(num = 0, value = 0)
+    chains_beta = bind_rows(chains_beta, zero)
+    # combine
+    both = full_join(chains, chains_beta, by=c('chain','index')) %>% # repeats all values of beta across alpha
+      mutate(num = num.x + num.y,
+             value = value.x + value.y) %>%
+      select(chain, index, num, countrynum, value)
+  }
+  if(ordinal == TRUE){
+    both = select(chains, chain, index, num, countrynum, value)
+  }
   
   # now make the overall means
   o_chains = group_by(both, chain, index, num) %>%
@@ -159,8 +184,11 @@ process_results = function(in.results.random,
   fixed_results = bind_rows(both, o_chains) %>%
     rename('res' = 'value') %>% # to match other function
     mutate('type' = 'fixed',
-           p = inv.logit(res), # inverse logit to get probability
            overall = 1 + as.numeric(countrynum > n.country)) # binary for overall vs countries
+  if(ordinal==FALSE){
+    fixed_results = mutate(fixed_results, 
+                           p = inv.logit(res)) # inverse logit to get probability for logistic model
+  }
   
   # combine fixed and random
   all_results = bind_rows(fixed_results, random_results) 
@@ -489,4 +517,43 @@ median_income = function(indata,
     #
     return(to_export)
   }
+}
+
+# function to create stats for one characteristic
+cell_rows = function(indata, var){
+  names(indata)[names(indata) == var] = 'category'
+  # combined three donation categories
+  stats_rows_three = mutate(indata, 
+                            geq_donation = case_when(
+                              geq_donation == 'Should donate less than 10%' ~ 'Any',
+                              geq_donation == 'Should donate 10%' ~ 'Any',
+                              geq_donation == 'Should donate more than 10%' ~ 'Any',
+                              TRUE ~ as.character(geq_donation)
+                            )) %>%
+    group_by(category, geq_donation) %>%
+    tally()  %>%
+    mutate(p = 100*prop.table(n),
+           cell = paste(n, ' (', round(p), ')', sep='')) %>%
+    filter(geq_donation =='Any') # just this row
+  # all seven categories
+  stats_rows = group_by(indata, category, geq_donation) %>%
+    tally() %>%
+    group_by(category) %>%
+    mutate(p = 100*prop.table(n),
+           cell = paste(n, ' (', round(p), ')', sep='')) 
+  # combine three-total and all seven
+  stats = bind_rows(stats_rows, stats_rows_three) %>%
+    select(-n, -p) %>%
+    pivot_wider(values_from = 'cell', names_from='geq_donation') %>%
+    mutate(category = as.character(category), # for binding
+           var = var) %>%
+    select(var, category, "Should donate more than 10%",
+           "Should donate 10%",
+           "Should donate less than 10%", # ordering
+           "Any",
+           "Should not donate",
+           "Do not know" ,
+           "Prefer not to say" 
+    )
+  return(stats)
 }

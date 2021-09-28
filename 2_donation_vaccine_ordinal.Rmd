@@ -1,0 +1,1058 @@
+---
+title: "Willingness to donate vaccine: ordinal results"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
+options(width=1000) # Wide pages
+options(scipen=999) # avoid scientific presentation
+library(ggplot2)
+library(gridExtra)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+library(boot) # for inv.logit
+library(janitor)
+library(flextable)
+source('99_functions.R')
+# consistent colour for missing category:
+missing_colour = 'darkseagreen3'
+
+# get the data
+load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
+```
+
+# Statistical methods
+
+We used an ordinal model with the following five ordered categories:
+
+* Should donate more than 10%
+* Should donate 10%
+* Should donate less than 10%
+* Prefer not to say / Do not know
+* Should not donate
+
+We used an ordinal logistic regression model assuming a latent normal distribution for donation willingness with four cut-points that define the observed ordinal response [@Dobson2018]. The model was formulated as a cumulative logit model and we assumed that the odds ratio for a one unit change in the predictors was the same across the ordinal responses. The odds ratios are interpreted as the odds of moving to a higher category (greater willingness to donate). The ordered cut-points can be unequally spaced to allow for differences in the proportion of responses over the five categories.
+
+We examine the association with the binary outcome and the independent variables of age (3 categories), gender (2 categories), education (3 categories), altruism (3 categories), income (3 categories) and political ideology (3 categories). 
+<!--- We fitted each variable independently and then used all four in a multiple variable model. --->
+
+Political ideology was originally asked on a scale of 0 (left) to 10 (right). The centre of the distribution on this scale varied greatly between countries. To make a more comparable variable for this multi-country analysis we split each country's results into tertiles to give a relative measure of political leaning within countries. So this variable had four categories: left, centre, right, unanswered.
+
+The model was fitted as a Bayesian ordinal regression model using random effects by country. We allowed the effect of the independent variables to vary by country as we had a strong expectation of differences between countries. For example, the education level "university" is not fixed over countries but instead varies by country around an overall effect. We plotted the country-level estimates and overall estimates. We plotted the estimated mean odds ratio and a Bayesian 95% credible interval for the mean.
+
+To test whether the independent variables did vary by country we fitted an alternative fixed effects model and compared the model fit using the deviance information criterion (DIC) which balances model complexity and fit [@Spiegelhalter2014]. We compared the more complex model with a random effect in each country with the simpler model with a fixed effect. All models used a random intercept in each country to account for overall differences between countries in the willingness to donate vaccines.
+
+The Bayesian models were fitted in WinBUGS (version 1.4.3) and the plots were made using R (version 4.1.1). We used two chains thinned by 3 with a burn-in and sample of 4,000. We visually checked the convergence and mixing of the chains. We used vague normal priors for the mean parameters in the logistic regression model and vague gamma priors for the inverse variances. The Bayesian models and R code are freely available on github (https://github.com/agbarnett/donate).
+
+We use Bayesian posterior p-values to compare the groups. The p-values examine the odds ratios for a group relative to the reference category, e.g., oldest age group relative to youngest. The p-values are the estimated probability that the odds ratio is equal to one (the null hypothesis).
+
+# Political leaning
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_politics.RData') # from 1_bayes_donation_model_politics_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed,  ordinal=TRUE) %>%
+  rename('p_num' = 'num')
+```
+
+### Fixed versus random model (political leaning)
+
+Here we examine whether the effect of political leaning varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (political leaning)
+
+```{r}
+# select results with best DIC
+stats_politics = filter(all_results, type == best_dic) %>%
+  filter(p_num >1) %>% # not the intercept
+  group_by(countrynum, p_num, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+          lower = quantile(res, 0.025), # Bayesian 95% CI
+          upper = quantile(res, 1 - 0.025),
+          or = exp(mean), # get odds ratio
+          or_lower = exp(lower),
+          or_upper = exp(upper),
+          pval1 = sum(res > 0)/n(), # one-sided
+          pval.dash = 1 - pval1,
+          pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_politics,
+                   politics = factor(p_num, levels=1:4, labels=poll_labels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, politics, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+
+The reference group is: `r poll_labels[1]`.
+
+### Plot of estimates (political leaning)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_politics, 
+                  countrynum = ifelse(p_num==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(p_num==4, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, p_num, overall) %>%
+    summarise(mean = mean(res),
+            lower = quantile(res, 0.025), # Bayesian CI
+            upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=poll_labels[1], lower=NA, upper=NA, p_num=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = poll_labels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_politics = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(p_num)))+
+  geom_point(size=3)+
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual('Political ideology:', values=colours, labels = poll_labels[-1])+ 
+  theme_bw()+
+  coord_flip()+
+  scale_y_continuous(limits=c(NA, 1))+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
+fplot_politics
+jpeg('figures/politics_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_politics)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is `r poll_labels[1]`.
+
+# Gender
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_gender.RData') # from 1_bayes_donation_model_gender_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('gnum' = 'num')
+```
+
+### Fixed versus random model (gender)
+
+Here we examine whether the effect of gender varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (gender)
+
+```{r}
+# select results with best DIC
+stats_gender = filter(all_results, type == best_dic) %>%
+  filter(gnum >1) %>% # not the intercept
+  group_by(countrynum, gnum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+          pval1 = sum(res > 0)/n(), # one-sided
+          pval.dash = 1 - pval1,
+          pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_gender,
+                   gender = factor(gnum, levels=1:2, labels=glabels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, gender, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (gender)
+
+```{r, fig.width=5.2, fig.height=5}
+for_plot = stats_gender # no need to jitter
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, gnum, overall) %>%
+    summarise(mean = mean(res),
+            lower = quantile(res, 0.025), # Bayesian CI
+            upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=glabels[1], lower=NA, upper=NA, gnum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = poll_labels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_gender = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(gnum)))+
+  geom_point(size=3)+
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'none')
+fplot_gender
+jpeg('figures/gender_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_gender)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is `r glabels[1]`.
+
+
+
+# Age
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_age.RData') # from 1_bayes_donation_model_age_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('anum' = 'num')
+```
+
+### Fixed versus random model (age)
+
+Here we examine whether the effect of age varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (age)
+
+```{r}
+# select results with best DIC
+stats_age = filter(all_results, type == best_dic) %>%
+  filter(anum >1) %>% # not the intercept
+  group_by(countrynum, anum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+          pval1 = sum(res > 0)/n(), # one-sided
+          pval.dash = 1 - pval1,
+          pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_age,
+                   age = factor(anum, levels=1:3, labels=age_labels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, age, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (age)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_age, 
+                  countrynum = ifelse(anum==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(anum==3, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, anum, overall) %>%
+    summarise(mean = mean(res),
+            lower = quantile(res, 0.025), # Bayesian CI
+            upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=age_labels[1], lower=NA, upper=NA, anum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = age_labels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_age = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(anum)))+
+  geom_point(size=3)+
+  scale_color_manual('Age group:', values=colours, labels = age_labels[-1])+ 
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+        )
+fplot_age
+jpeg('figures/age_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_age)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is: `r age_labels[1]`.
+
+# Altruism
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_altruism.RData') # from 1_bayes_donation_model_altruism_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('anum' = 'num')
+```
+
+### Fixed versus random model (Altruism)
+
+Here we examine whether the effect of altruism varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (Altruism)
+
+```{r}
+# select results with best DIC
+stats_altruism = filter(all_results, type == best_dic) %>%
+  filter(anum >1) %>% # not the intercept
+  group_by(countrynum, anum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+          pval1 = sum(res > 0) /n(), # one-sided
+          pval.dash = 1 - pval1,
+          pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_altruism,
+                   altruism = factor(anum, levels=1:3, labels=altruism_labels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, altruism, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (Altruism)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_altruism, 
+                  countrynum = ifelse(anum==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(anum==4, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, anum, overall) %>%
+    summarise(mean = mean(res),
+              lower = quantile(res, 0.025), # Bayesian CI
+              upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=altruism_labels[1], lower=NA, upper=NA, anum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = altruism_labels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_altruism = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(anum)))+
+  geom_point(size=3)+
+  scale_color_manual('Altruism group:', values=colours, labels = altruism_labels[-1])+ 
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+  )
+fplot_altruism
+jpeg('figures/altruism_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_altruism)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is: `r altruism_labels[1]`.
+
+# Education
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_education.RData') # from 1_bayes_donation_model_education_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('enum' = 'num')
+```
+
+### Fixed versus random model (education)
+
+Here we examine whether the effect of education varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (education)
+
+```{r}
+# select results with best DIC
+stats_education = filter(all_results, type == best_dic) %>%
+  filter(enum >1) %>% # not the intercept
+  group_by(countrynum, enum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+            pval1 = sum(res > 0) / n(), # one-sided
+            pval.dash = 1 - pval1,
+            pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_education,
+                   education = factor(enum, levels=1:4, labels=elabels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, education, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (education)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_education, 
+                  countrynum = ifelse(enum==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(enum==3, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, enum, overall) %>%
+    summarise(mean = mean(res),
+              lower = quantile(res, 0.025), # Bayesian CI
+              upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=elabels[1], lower=NA, upper=NA, enum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = elabels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_education = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(enum)))+
+  geom_point(size=3)+
+  scale_color_manual('Education:', values=colours, labels = elabels[-1])+ 
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+  )
+fplot_education
+jpeg('figures/education_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_education)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is: `r elabels[1]`.
+
+# Income
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_income.RData') # from 1_bayes_donation_model_income_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('inum' = 'num')
+```
+
+### Fixed versus random model (income)
+
+Here we examine whether the effect of income varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (income)
+
+```{r}
+# select results with best DIC
+stats_income = filter(all_results, type == best_dic) %>%
+  filter(inum >1) %>% # not the intercept
+  group_by(countrynum, inum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+            pval1 = sum(res > 0) / n(), # one-sided
+            pval.dash = 1 - pval1,
+            pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_income,
+                   income = factor(inum, levels=1:3, labels=income_labels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, income, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (income)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_income, 
+                  countrynum = ifelse(inum==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(inum==3, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, inum, overall) %>%
+    summarise(mean = mean(res),
+              lower = quantile(res, 0.025), # Bayesian CI
+              upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=income_labels[1], lower=NA, upper=NA, inum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = elabels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_income = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(inum)))+
+  geom_point(size=3)+
+  scale_color_manual('Income:', values=colours, labels = income_labels[-1])+ 
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+  )
+fplot_income
+jpeg('figures/income_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_income)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is: `r income_labels[1]`.
+
+# Willingness to risk health
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_ordinal_model_risk.RData') # from 1_bayes_donation_model_risk_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
+  rename('rnum' = 'num')
+```
+
+### Fixed versus random model (Willingness to risk health)
+
+Here we examine whether the effect of willingness to risk health to risk varied across countries using the deviance information criterion.
+
+```{r}
+d1 = data.frame(Model = 'Random', pD=bugs.results$pD , DIC=bugs.results$DIC)
+d2 = data.frame(Model = 'Fixed', pD=bugs.results.fixed$pD, DIC=bugs.results.fixed$DIC)
+dic_table = bind_rows(d1, d2)
+ftab = flextable(dic_table) %>%
+  theme_box() %>%
+  autofit()  %>%
+  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=3, digits=0)
+ftab
+# flag for which is best (used below)
+best_dic = tolower(arrange(dic_table, DIC) %>% slice(1) %>%pull(Model))
+strong = ifelse(abs(diff(dic_table$DIC))>10 , 'strong', '')
+```
+
+pD is the expected number of parameters. The difference in the DIC is `r round(diff(dic_table$DIC))` which is `r strong` evidence that the `r best_dic` model is better. 
+
+### Table of odds ratios and tests of differences (Willingness to risk health)
+
+```{r}
+# select results with best DIC
+stats_risk = filter(all_results, type == best_dic) %>%
+  filter(rnum >1) %>% # not the intercept
+  group_by(countrynum, rnum, overall) %>%
+  summarise(mean = mean(res), # log odds ratio
+            lower = quantile(res, 0.025), # Bayesian 95% CI
+            upper = quantile(res, 1 - 0.025),
+            or = exp(mean), # get odds ratio
+            or_lower = exp(lower),
+            or_upper = exp(upper),
+            pval1 = sum(res > 0) / n(), # one-sided
+            pval.dash = 1 - pval1,
+            pval = 2*min(pval1, pval.dash)) %>% # two-sided bayesian posterior p-value
+  ungroup() %>%
+  select(-pval1, -pval.dash)
+
+#
+for_table = mutate(stats_risk,
+                   risk = factor(rnum, levels=1:3, labels=risk_labels),
+                   country = factor(countrynum, levels=1:(n.country+1), labels=c(countries, 'Overall')),
+                   pval = format.pval(pval, digits=3, eps=0.001)) %>%
+  select(country, risk, or, or_lower, or_upper, pval) %>%
+  rename("OR" = 'or',
+         'Lower' = 'or_lower',
+         'Upper' = 'or_upper',
+         'P-value' = 'pval') 
+#
+ftab = flextable(for_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  colformat_double(j=3:5, digits=2) %>%
+  merge_v(j=1)
+ftab
+```  
+
+### Plot of estimates (Willingness to risk health)
+
+```{r, fig.width=5.2, fig.height=5}
+# colour by category, jitter to avoid overlap
+for_plot = mutate(stats_risk, 
+                  countrynum = ifelse(rnum==2, countrynum - 0.15, countrynum),
+                  countrynum = ifelse(rnum==3, countrynum + 0.15, countrynum))
+# use fixed or random for overall
+if(best_dic == 'Fixed'){
+  for_plot = filter(for_plot, overall == 1)
+  add_fixed_mean = filter(all_results, type=='fixed', overall==2) %>%
+    group_by(countrynum, rnum, overall) %>%
+    summarise(mean = mean(res),
+              lower = quantile(res, 0.025), # Bayesian CI
+              upper = quantile(res, 1 - 0.025)) %>%
+    ungroup()
+  for_plot = bind_rows(for_plot, add_fixed_mean)
+}
+# plot
+label = data.frame(x=n.country+1.5, y=1, label=risk_labels[1], lower=NA, upper=NA, rnum=NA)
+colours = RColorBrewer::brewer.pal(4, 'Dark2')
+index = elabels %in% c('Missing','Unanswered')
+if(any(index)){colours[index] = missing_colour} # consistent colour for missing
+# forest plots
+fplot_risk = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower), ymax=exp(upper), col=factor(rnum)))+
+  geom_point(size=3)+
+  scale_color_manual('Risk:', values=colours, labels = risk_labels[-1])+ 
+  geom_hline(yintercept=1, lty=2)+ # reference line at odds ratio of 1
+  geom_label(data=label, aes(x=x, y=y, label=label), show.legend=FALSE)+
+  geom_errorbar(width=0, size=1.05)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio for supporting greater vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        legend.position = 'top', legend.justification = 'right',
+        legend.box.spacing = unit(0, 'mm'), # reduce space between plot and legend
+        legend.box.margin	= margin(t=0, r=0, b=0, l=0), # reduce space around legend
+        legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
+  )
+fplot_risk
+jpeg('figures/risk_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+print(fplot_risk)
+invisible(dev.off())
+```
+
+The reference group at the odds ratio of 1 is: `r risk_labels[1]`.
+
+# Multiple variable model
+
+Here we run a multiple variable version of the ordinal model. We only fitted a random model and did not assume fixed effects across countries. 
+
+#### Plot of estimates (multiple variable model)
+
+The odds ratio axes are fixed across panels. 
+
+```{r, include=FALSE}
+# get the results from the winbugs model
+load('results/bugs_model_multiple_ordinal.RData') # from 1_bayes_donation_model_multiple_ordinal.R
+
+## construct probability of supporting vaccine donation from chains
+all_results = process_results_multiple(in.results = bugs.results, max.category.num=16, ordinal=TRUE) %>%
+  mutate(label = factor(num, levels=1:16, labels=X_vars),
+         labelc = as.character(label),
+         facet = case_when(
+           str_detect(labelc, '^age_') ~ 'Age',
+           str_detect(labelc, '^e_') ~ 'Education',
+           str_detect(labelc, '^gender_') ~ 'Gender',
+           str_detect(labelc, '^poll_') ~ 'Ideology',
+           str_detect(labelc, '^altruism_') ~ 'Altruism',
+           str_detect(labelc, '^risk_') ~ 'Willingness to risk health',
+           str_detect(labelc, '^income_') ~ 'Income',
+           str_detect(labelc, 'intercept') ~ 'Intercept',
+         ))
+```
+
+```{r, fig.width=8.5, fig.height=7}
+# remove intercepts
+not_intercepts = filter(all_results, facet !='Intercept')
+# get statistics using chains
+stats_mult = group_by(not_intercepts, countrynum, overall, label, facet) %>%
+  summarise(mean = mean(res),
+            lower = quantile(res, 0.025), # Bayesian CI
+            upper = quantile(res, 1 - 0.025),
+            mean = exp(mean), # convert to odds ratios
+            lower = exp(lower),
+            upper = exp(upper) ) %>%
+  ungroup()
+# prepare for plot using jittering
+for_plot = mutate(stats_mult,
+      # age
+      countrynum = ifelse(label=='age_mid', countrynum+0.2, countrynum),
+      countrynum = ifelse(label=='age_old', countrynum-0.2, countrynum),
+      # altruism
+      countrynum = ifelse(label=='altruism_generous', countrynum+0.2, countrynum),
+      countrynum = ifelse(label=='altruism_noanswer', countrynum-0.2, countrynum),
+      # income
+     countrynum = ifelse(label=='income_high', countrynum+0.2, countrynum),
+     countrynum = ifelse(label=='income_missing', countrynum-0.2, countrynum),
+      # risk
+      countrynum = ifelse(label=='risk_willing', countrynum+0.2, countrynum),
+      countrynum = ifelse(label=='risk_missing', countrynum-0.2, countrynum),
+      # education
+      countrynum = ifelse(label=='e_uni', countrynum-0.3, countrynum),
+      countrynum = ifelse(label=='e_unknown', countrynum+0.3, countrynum),
+      # ideology
+      countrynum = ifelse(label=='poll_right', countrynum-0.3, countrynum),
+      countrynum = ifelse(label=='poll_missing', countrynum+0.3, countrynum))
+# text for reference lines at OR = 1
+ref_text = read.table(header=T, sep=',', text='
+facet,reflabel
+Gender,Not male
+Age,Young
+Education,Primary
+Ideology,Left
+Altruism,Meagre
+Income,Low
+Willingness to risk health,Unwilling
+') %>%
+  mutate(
+    x = 8.9, # puts label at bottom of plot
+  y=1, ymin=1, ymax=1, label=1) 
+
+## text to label points
+points_text = filter(for_plot, countrynum <= 1.5) %>%
+  mutate(reflabel = case_when(
+    label == 'gender_male' ~ 'Male',
+    label == 'e_secondary' ~ 'Secondary',
+    label == 'e_uni' ~ 'University',
+    label == 'e_unknown' ~ 'Unanswered',
+    label == 'age_mid' ~ 'Middle',
+    label == 'age_old' ~ 'Old',
+    label == 'poll_central' ~ 'Centre',
+    label == 'poll_right' ~ 'Right',
+    label == 'poll_missing' ~ 'Unanswered',
+    label == 'altruism_generous' ~ 'Generous',
+    label == 'altruism_noanswer' ~ 'Unanswered',
+    label == 'risk_missing' ~ 'Unanswered',
+    label == 'risk_willing' ~ 'Willing',
+    label == 'income_high' ~ 'High',
+    label == 'income_missing' ~ 'Unanswered')
+  ) 
+# change labels that don't work
+index = points_text$facet %in% c('Altruism') & points_text$reflabel == 'Generous'
+points_text$upper[index] = points_text$upper[index] - 2 # move to left
+
+#
+palette = c(brewer.pal(4, 'Dark2'), missing_colour)
+# colours, same for missing
+colours = palette[c(1,1,2,5,1,2,1,2,5,5,1,5,1,2,5,2)]
+# forest plots
+fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, col=factor(label)))+
+  geom_hline(lty=2, yintercept = 1, col='dark grey')+
+  geom_label(data=ref_text, aes(x=x, y=y, ymin=ymin, ymax=ymax, label=reflabel), col='dark grey')+
+  geom_text(data=points_text, aes(x=countrynum, y=upper, ymin=upper, ymax=upper, col=factor(label), label=reflabel), hjust = -0.1, size=3)+ # hjust puts labels on left
+  geom_point(size=2)+
+  geom_errorbar(width=0, size=1.05)+
+  scale_color_manual(NULL, values=colours)+
+  theme_bw()+
+  coord_flip()+
+  scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
+  xlab('')+
+  ylab('Odds ratio in favour of supporting vaccine donation')+
+  theme(panel.grid.minor = element_blank(),
+        text = element_text(size=14),
+        legend.position = 'none',
+        legend.box.spacing = unit(0, 'mm') # reduce space between plot and legend
+         )+
+  facet_wrap(~facet, nrow=2)
+fplot
+jpeg('figures/multiple_ordinal.jpg', width=8.5, height=7, units='in', res=500)
+print(fplot)
+invisible(dev.off())
+```
+
+#### Table of estimates (multiple variable model)
+
+```{r}
+ocountries = c(countries, 'Overall')
+table = mutate(stats_mult, 
+               country = ocountries[countrynum],
+               mean = round(mean, 2),
+               lower = round(lower, 2),
+               upper = round(upper, 2),
+               cell = paste(mean, ' (', lower, ' to ', upper, ')', sep='')) %>%
+  select(country, label, cell) %>%
+  pivot_wider(values_from=cell, names_from=country)
+ftab  =flextable(table) %>%
+  theme_box() %>%
+  fontsize(size=6, part='all') %>%
+  autofit()
+ftab
+```
+
+
+# Combined plot
+
+The plot below is a combined plot of all the single variable models. The scales on the odds ratio axes vary between plots. 
+
+```{r, fig.width=14, fig.height=9}
+# remove x-axis labels; fix space for two legends
+fplot_education = fplot_education + ylab('') + guides(color=guide_legend(nrow=2, byrow=TRUE))
+fplot_politics = fplot_politics + ylab('')+ guides(color=guide_legend(nrow=2, byrow=TRUE))
+fplot_gender = fplot_gender + ylab('') + ggtitle('Gender') + theme(plot.title = element_text(size = 11))
+fplot_age = fplot_age + ylab('')
+fplot_altruism = fplot_altruism + ylab('')
+fplot_risk = fplot_risk + ylab('')+ guides(color=guide_legend(nrow=2, byrow=TRUE))
+fplot_income = fplot_income + ylab('')
+
+# plot
+grid.arrange(fplot_age,  fplot_gender, fplot_altruism, fplot_income,
+              fplot_education, fplot_politics, fplot_risk, ncol=4,
+              bottom = 'Odds ratio for supporting greater vaccine donation')
+jpeg('figures/combined_ordinal.jpg', width=14, height=8, units='in', res=600)
+grid.arrange(fplot_age,  fplot_gender, fplot_altruism, fplot_income,
+              fplot_education, fplot_politics, fplot_risk, ncol=4,
+              bottom = 'Odds ratio for supporting greater vaccine donation')
+invisible(dev.off())
+```
+
+
+# References

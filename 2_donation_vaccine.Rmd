@@ -16,11 +16,13 @@ library(dplyr)
 library(tidyr)
 library(RColorBrewer)
 library(boot) # for inv.logit
+library(janitor)
 library(flextable)
 source('99_functions.R')
 # consistent colour for missing category:
 missing_colour = 'darkseagreen3'
-#
+
+# get the data
 load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
 ```
 
@@ -48,25 +50,47 @@ The model was fitted as a Bayesian logistic regression model using random effect
 
 To test whether the independent variables did vary by country we fitted an alternative fixed effects model and compared the model fit using the deviance information criterion (DIC) which balances model complexity and fit [@Spiegelhalter2014]. We compared the more complex model with a random effect in each country with the simpler model with a fixed effect. All models used a random intercept in each country to account for overall differences between countries in the willingness to donate vaccines.
 
-The Bayesian models were fitted in WinBUGS (version 1.4.3) and the plots were made using R (version 4.0.3). We used two chains thinned by 3 with a burn-in and sample of 4,000. We visually checked the convergence and mixing of the chains. We used vague normal priors for the mean parameters in the logistic regression model and vague gamma priors for the inverse variances. The Bayesian models and R code are freely available on github (https://github.com/agbarnett/donate).
+The Bayesian models were fitted in WinBUGS (version 1.4.3) and the plots were made using R (version 4.1.1). We used two chains thinned by 3 with a burn-in and sample of 4,000. We visually checked the convergence and mixing of the chains. We used vague normal priors for the mean parameters in the logistic regression model and vague gamma priors for the inverse variances. The Bayesian models and R code are freely available on github (https://github.com/agbarnett/donate).
 
 # Descriptive statistics
 
+### Large summary table
+
+```{r}
+# run the function to create rows of statistics
+educ = cell_rows(indata=data, var='education_level')
+ideology = cell_rows(indata=data, var='ideologycat')
+altruism = cell_rows(indata=data, var='altruism')
+income = cell_rows(indata=data, var='incomecat')
+gender = cell_rows(indata=data, var='sex')
+agecat = cell_rows(indata=data, var='age_group')
+risks = cell_rows(indata=data, var='risk_group')
+mega_table = bind_rows(educ, ideology, altruism, income, gender, agecat, risks) %>%
+  rename('Variable' = 'var')
+header = data.frame()
+ftab = flextable(mega_table) %>%
+  add_header(Variable='' , category='' ,
+             `Should donate less than 10%`='Willing to donate' ,
+             `Should donate 10%`='Willing to donate' ,
+             `Should donate more than 10%`='Willing to donate' ,
+             `Any`='Willing to donate' ,
+             `Should not donate`='' ,
+             `Do not know`='' ,
+             `Prefer not to say`='') %>%
+  merge_v(j=1) %>%
+  merge_h(i=1, part='header') %>%
+  theme_box() %>%
+  fontsize(j = 1:9, size = 9, part = "all") %>%
+  width(j = 1:2, width=1) %>%
+  width(j = 3:9, width=0.8) 
+ftab
+```
 
 ### Gender
 
 ```{r}
 #
-for_tab = mutate(data, sex = case_when(
-  gender == 'Male' ~ 1,
-  gender == 'Maschio' ~ 1,
-  gender == 'Masculino' ~ 1,
-  gender == 'Homme' ~ 1,
-  is.character(gender) ~ 0
-),
-sex = factor(sex, levels=0:1, labels=c('Female','Male'))
-)
-tab = group_by(for_tab, sex) %>%
+tab = group_by(data, sex) %>%
   tally() %>%
   mutate(percent = round(100*prop.table(n)))
 ftab = flextable(tab) %>%
