@@ -2,6 +2,13 @@
 # functions for vaccine survey
 # Sep 2021
 
+# function for rounding numbers with zeros kept
+roundz = function(x, digits){
+  dformat = paste('%.', digits, 'f', sep='')
+  x = sprintf(dformat, round(x, digits))
+  return(x)
+}
+
 # makes nice labels for table / plot
 nice.label = function(intext){
   out = case_when(

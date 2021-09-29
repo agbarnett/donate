@@ -1,5 +1,5 @@
 ---
-title: "Willingness to donate vaccine: ordinal results"
+title: "Willingness to donate vaccine: ordinal results: version without prefer not to say / do not know"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: word_document
 bibliography: references.bib
@@ -28,15 +28,16 @@ load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
 
 # Statistical methods
 
-We used an ordinal model with the following five ordered categories:
+We used an ordinal model with the following four ordered categories:
 
 * Should donate more than 10%
 * Should donate 10%
 * Should donate less than 10%
-* Prefer not to say / Do not know
 * Should not donate
 
-We used an ordinal logistic regression model assuming a latent normal distribution for donation willingness with four cut-points that define the observed ordinal response [@Dobson2018]. The model was formulated as a cumulative logit model and we assumed that the odds ratio for a one unit change in the predictors was the same across the ordinal responses. The odds ratios are interpreted as the odds of moving to a higher category (greater willingness to donate). The ordered cut-points can be unequally spaced to allow for differences in the proportion of responses over the five categories.
+Answers of "Prefer not to say" or "Do not know" were excluded for this analysis.
+
+We used an ordinal logistic regression model assuming a latent normal distribution for donation willingness with three cut-points that define the observed ordinal response [@Dobson2018]. The model was formulated as a cumulative logit model and we assumed that the odds ratio for a one unit change in the predictors was the same across the ordinal responses. The odds ratios are interpreted as the odds of moving to a higher category (greater willingness to donate). The ordered cut-points can be unequally spaced to allow for differences in the proportion of responses over the five categories.
 
 We examine the association with the binary outcome and the independent variables of age (3 categories), gender (2 categories), education (3 categories), altruism (3 categories), income (3 categories) and political ideology (3 categories). 
 <!--- We fitted each variable independently and then used all four in a multiple variable model. --->
@@ -55,7 +56,7 @@ We use Bayesian posterior p-values to compare the groups. The p-values examine t
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_politics.RData') # from 1_bayes_donation_model_politics_ordinal.R
+load('results/bugs_ordinal_model_politics_four.RData') # from 1_bayes_donation_model_politics_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed,  ordinal=TRUE) %>%
@@ -156,7 +157,7 @@ fplot_politics = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(l
   scale_color_manual('Political ideology:', values=colours, labels = poll_labels[-1])+ 
   theme_bw()+
   coord_flip()+
-  scale_y_continuous(limits=c(NA, 1))+
+#  scale_y_continuous(limits=c(NA, 1))+
   scale_x_reverse(breaks=1:(n.country+1), labels=c(countries,'Overall'))+ # reverse so Australia is at top
   xlab('')+
   ylab('Odds ratio for supporting greater vaccine donation')+
@@ -167,7 +168,7 @@ fplot_politics = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(l
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
         )
 fplot_politics
-jpeg('figures/politics_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/politics_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_politics)
 invisible(dev.off())
 ```
@@ -178,7 +179,7 @@ The reference group at the odds ratio of 1 is `r poll_labels[1]`.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_gender.RData') # from 1_bayes_donation_model_gender_ordinal.R
+load('results/bugs_ordinal_model_gender_four.RData') # from 1_bayes_donation_model_gender_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -278,20 +279,18 @@ fplot_gender = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(low
   theme(panel.grid.minor = element_blank(),
         legend.position = 'none')
 fplot_gender
-jpeg('figures/gender_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/gender_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_gender)
 invisible(dev.off())
 ```
 
 The reference group at the odds ratio of 1 is `r glabels[1]`.
 
-
-
 # Age
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_age.RData') # from 1_bayes_donation_model_age_ordinal.R
+load('results/bugs_ordinal_model_age_four.RData') # from 1_bayes_donation_model_age_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -399,7 +398,7 @@ fplot_age = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower)
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
         )
 fplot_age
-jpeg('figures/age_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/age_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_age)
 invisible(dev.off())
 ```
@@ -410,7 +409,7 @@ The reference group at the odds ratio of 1 is: `r age_labels[1]`.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_altruism.RData') # from 1_bayes_donation_model_altruism_ordinal.R
+load('results/bugs_ordinal_model_altruism_four.RData') # from 1_bayes_donation_model_altruism_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -518,7 +517,7 @@ fplot_altruism = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(l
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
   )
 fplot_altruism
-jpeg('figures/altruism_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/altruism_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_altruism)
 invisible(dev.off())
 ```
@@ -529,7 +528,7 @@ The reference group at the odds ratio of 1 is: `r altruism_labels[1]`.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_education.RData') # from 1_bayes_donation_model_education_ordinal.R
+load('results/bugs_ordinal_model_education_four.RData') # from 1_bayes_donation_model_education_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -637,7 +636,7 @@ fplot_education = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
   )
 fplot_education
-jpeg('figures/education_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/education_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_education)
 invisible(dev.off())
 ```
@@ -648,7 +647,7 @@ The reference group at the odds ratio of 1 is: `r elabels[1]`.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_income.RData') # from 1_bayes_donation_model_income_ordinal.R
+load('results/bugs_ordinal_model_income_four.RData') # from 1_bayes_donation_model_income_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -756,7 +755,7 @@ fplot_income = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(low
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
   )
 fplot_income
-jpeg('figures/income_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/income_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_income)
 invisible(dev.off())
 ```
@@ -767,7 +766,7 @@ The reference group at the odds ratio of 1 is: `r income_labels[1]`.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_ordinal_model_risk.RData') # from 1_bayes_donation_model_risk_ordinal.R
+load('results/bugs_ordinal_model_risk_four.RData') # from 1_bayes_donation_model_risk_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results(in.results.random=bugs.results, in.results.fixed=bugs.results.fixed, ordinal=TRUE) %>%
@@ -875,7 +874,7 @@ fplot_risk = ggplot(data=for_plot, aes(x=countrynum, y=exp(mean), ymin=exp(lower
         legend.margin = margin(t=0, r=0, b=0, l=0, unit='mm') # reduce space around legend
   )
 fplot_risk
-jpeg('figures/risk_donation_ordinal.jpg', width=5, height=5, units='in', res=500)
+jpeg('figures/risk_donation_ordinal_four.jpg', width=5, height=5, units='in', res=500)
 print(fplot_risk)
 invisible(dev.off())
 ```
@@ -892,7 +891,7 @@ The odds ratio axes are fixed across panels.
 
 ```{r, include=FALSE}
 # get the results from the winbugs model
-load('results/bugs_model_multiple_ordinal.RData') # from 1_bayes_donation_model_multiple_ordinal.R
+load('results/bugs_model_multiple_ordinal_four.RData') # from 1_bayes_donation_model_multiple_ordinal.R
 
 ## construct probability of supporting vaccine donation from chains
 all_results = process_results_multiple(in.results = bugs.results, max.category.num=16, ordinal=TRUE) %>%
@@ -1004,7 +1003,7 @@ fplot = ggplot(data=for_plot, aes(x=countrynum, y=mean, ymin=lower, ymax=upper, 
          )+
   facet_wrap(~facet, nrow=2)
 fplot
-jpeg('figures/multiple_ordinal.jpg', width=8.5, height=7, units='in', res=500)
+jpeg('figures/multiple_ordinal_four.jpg', width=8.5, height=7, units='in', res=500)
 print(fplot)
 invisible(dev.off())
 ```
@@ -1047,7 +1046,7 @@ fplot_income = fplot_income + ylab('')
 grid.arrange(fplot_age,  fplot_gender, fplot_altruism, fplot_income,
               fplot_education, fplot_politics, fplot_risk, ncol=4,
               bottom = 'Odds ratio for supporting greater vaccine donation')
-jpeg('figures/combined_ordinal.jpg', width=14, height=8, units='in', res=600)
+jpeg('figures/combined_ordinal_four.jpg', width=14, height=8, units='in', res=600)
 grid.arrange(fplot_age,  fplot_gender, fplot_altruism, fplot_income,
               fplot_education, fplot_politics, fplot_risk, ncol=4,
               bottom = 'Odds ratio for supporting greater vaccine donation')

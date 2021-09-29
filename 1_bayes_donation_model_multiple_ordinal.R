@@ -4,9 +4,20 @@
 library(dplyr)
 library(R2WinBUGS)
 
+# select response categories, five with missing data, four without
+categories = 'four' 
+# results are saved
+outfile = 'results/bugs_model_multiple_ordinal.RData'
+if(categories == 'four'){
+  outfile = 'results/bugs_model_multiple_ordinal_four.RData'
+}
+
 # get the data
 load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
-
+# remove do not know / prefer not to say
+if(categories == 'four'){
+  data = filter(data, donate_ordinal != 2) 
+}
 ## manage data
 data = mutate(data, 
               countrynum = as.numeric(as.factor(country))) %>%
@@ -38,55 +49,10 @@ for.model = bind_cols(for.model, small)
 
 # create external text file with bugs model
 model.file = 'bugs_donation_multiple_ordinal.txt'
-bugs = file(model.file, 'w')
-cat('model{
-## Likelihood
-  for (i in 1:N){
-    donate[i, 1:ncat] ~ dmulti(pi[i, 1:ncat], 1)
-    # Cumulative probability of > category k given cutpoint
-    for (k in 1:(ncat-1)){
-      logit(Q[i,k]) <- beta[countrynum[i],1]*X[i,1] +
-  beta[countrynum[i],2]*X[i,2] +
-  beta[countrynum[i],3]*X[i,3] +
-  beta[countrynum[i],4]*X[i,4] +
-  beta[countrynum[i],5]*X[i,5] +
-  beta[countrynum[i],6]*X[i,6] +
-  beta[countrynum[i],7]*X[i,7] +
-  beta[countrynum[i],8]*X[i,8] +
-  beta[countrynum[i],9]*X[i,9] +
-  beta[countrynum[i],10]*X[i,10]+
-  beta[countrynum[i],11]*X[i,11]+
-  beta[countrynum[i],12]*X[i,12]+
-  beta[countrynum[i],13]*X[i,13]+
-  beta[countrynum[i],14]*X[i,14]+ 
-  beta[countrynum[i],15]*X[i,15]+ 
-  beta[countrynum[i],16]*X[i,16] - C[countrynum[i],k];
-    }
-    # Calculate probabilities
-    pi[i,1] <- 1 - Q[i,1]; # Pr(cat=1) = 1 - Pr(cat>1);
-    for (k in 2:(ncat-1)) {
-      pi[i,k] <- Q[i,k-1] - Q[i,k]; # Pr(cat>k-1) - Pr(cat>k);
-    }
-    pi[i,ncat] <- Q[i,ncat-1]; # Pr(cat=k) = Pr(cat>k-1);
-  }
-  ## Priors
-  for (i in 1:M){ # loop through countries
-    beta[i, 1:P] ~ dmnorm(mu.beta[1:P], omega[1:P, 1:P])
-  }
-  omega[1:P, 1:P] ~ dwish(R[1:P, 1:P], P)
-  for (i in 1:P){ # 
-    mu.beta[i] ~ dnorm(0, tau.beta[i])
-    tau.beta[i] ~ dgamma(0.1, 0.1)
-  }
-  # ordered cut-offs
-  for (i in 1:M){ # loop through countries
-    C[i,1] <- 0; # for identifiability
-    C[i,2] ~ dunif(C[i,1], C[i,3])
-    C[i,3] ~ dunif(C[i,2], C[i,4])
-    C[i,4] ~ dunif(C[i,3], 10)
-  }
-}\n', file=bugs)
-close(bugs)
+type = 'random'
+n_indep = 16
+n_categories = ifelse(categories=='four', 4, 5)
+source('99_make_bugs.R')
 
 # MCMC parameters
 source('1_MCMC_parameters.R')
@@ -112,12 +78,16 @@ bdata = list(N = N,
              donate = donate, 
              countrynum = for.model$countrynum)
 # initial values
-C = matrix(rep(c(NA,0.1,0.2,0.3), n.country), byrow=TRUE, ncol=ncat-1) # needs ordered start
+c_start = NA 
+for(k in 1:(n_categories-2)){
+  c_start = c(c_start, k*0.1)
+}
+C = matrix(rep(c_start, n.country), byrow=TRUE, ncol=ncat-1) # needs ordered start
 inits = list(beta = matrix(rep(0, P*n.country), ncol=P), 
              C = C,
              tau.beta = rep(1,P), 
              mu.beta = rep(0,P))
-#inits = rep(list(inits), n_chains)
+inits = rep(list(inits), n_chains)
 
 # run BUGS
 parms = c('beta','C','mu.beta','tau.beta')
@@ -128,7 +98,7 @@ bugs.results$summary
 
 # save results
 countries = unique(for.model$country)
-save(bugs.results, X_vars, countries, file='results/bugs_model_multiple_ordinal.RData')
+save(bugs.results, X_vars, countries, file=outfile)
 
-## export to jags - stuck with bugs
+## export to jags - stuck with bugs instead
 #save(inits, bdata, parms, model.file, file='//hpc-fs/barnetta/vaccine/jags_ready_ordinal.RData')

@@ -4,11 +4,22 @@
 library(dplyr)
 library(R2WinBUGS)
 
+# select response categories, five with missing data, four without
+categories = 'four' 
+# results are saved
+outfile = paste('results/bugs_ordinal_model_age.RData')
+if(categories == 'four'){
+  outfile = paste('results/bugs_ordinal_model_age_four.RData')
+}
+
 ### Part 0: set up the data
 
 # get the data
 load('data/donate_analysis_ready.RData') # from 0_read_data_donation.R
-
+# remove do not know / prefer not to say
+if(categories == 'four'){
+  data = filter(data, donate_ordinal != 2) 
+}
 # country numbers
 data = mutate(data, 
               countrynum = as.numeric(as.factor(country)),
@@ -30,33 +41,10 @@ age_labels = c('Up to 39','40 to 59','60+')
 
 # create external text file with bugs model
 model.file = 'bugs_donation_age_ordinal_fixed.txt'
-bugs = file(model.file, 'w')
-cat('model{
-  ## Likelihood
-  for (i in 1:N){
-    donate[i, 1:ncat] ~ dmulti(pi[i, 1:ncat], 1)
-    # Cumulative probability of > category k given cutpoint
-    for (k in 1:(ncat-1)){
-      logit(Q[i,k]) <- beta[1]*X[i,1] + 
-      beta[2]*X[i,2] +
-      beta[3]*X[i,3] - C[k];
-    }
-    # Calculate probabilities
-    pi[i,1] <- 1 - Q[i,1]; # Pr(cat=1) = 1 - Pr(cat>1);
-    for (k in 2:ncat-1) {
-      pi[i,k] <- Q[i,k-1] - Q[i,k]; # Pr(cat>k-1) - Pr(cat>k);
-    }
-    pi[i,ncat] <- Q[i,ncat-1]; # Pr(cat=k) = Pr(cat>k-1);
-  }
-  ## Priors
-  for (k in 1:P){beta[k] ~ dnorm(0, 0.00001)}
-  # ordered cut-offs
-  C[1] <- 0; # for identifiability
-  C[2] ~ dunif(C[1], C[3])
-  C[3] ~ dunif(C[2], C[4])
-  C[4] ~ dunif(C[3], 10)
-}\n', file=bugs)
-close(bugs)
+type = 'fixed'
+n_indep = length(age_labels)
+n_categories = ifelse(categories=='four', 4, 5)
+source('99_make_bugs.R')
 
 # MCMC parameters
 source('1_MCMC_parameters.R')
@@ -75,7 +63,11 @@ bdata = list(N = N,
              P = P,
              donate = donate, 
              ncat = ncat)
-inits = list(beta=rep(0,P), C=c(NA,0.1,0.2,0.3))
+c_start = NA 
+for(k in 1:(n_categories-2)){
+  c_start = c(c_start, k*0.1)
+}
+inits = list(beta=rep(0,P), C=c_start)
 inits = rep(list(inits), n_chains)
 
 # run BUGS
@@ -89,42 +81,8 @@ bugs.results.fixed$summary
 
 # create external text file with bugs model
 model.file = 'bugs_donation_age_ordinal_variable.txt'
-bugs = file(model.file, 'w')
-cat('model{
-  ## Likelihood
-  for (i in 1:N){
-    donate[i, 1:ncat] ~ dmulti(pi[i, 1:ncat], 1)
-    # Cumulative probability of > category k given cutpoint
-    for (k in 1:(ncat-1)){
-      logit(Q[i,k]) <- beta[countrynum[i],1]*X[i,1] + 
-      beta[countrynum[i],2]*X[i,2] +
-      beta[countrynum[i],3]*X[i,3] - C[countrynum[i],k];
-    }
-    # Calculate probabilities
-    pi[i,1] <- 1 - Q[i,1]; # Pr(cat=1) = 1 - Pr(cat>1);
-    for (k in 2:ncat-1) {
-      pi[i,k] <- Q[i,k-1] - Q[i,k]; # Pr(cat>k-1) - Pr(cat>k);
-    }
-    pi[i,ncat] <- Q[i,ncat-1]; # Pr(cat=k) = Pr(cat>k-1);
-  }
-  ## Priors
-  for (i in 1:M){ # loop through countries
-    beta[i, 1:P] ~ dmnorm(mu.beta[1:P], omega[1:P, 1:P])
-  }
-  omega[1:P, 1:P] ~ dwish(R[1:P, 1:P], P)
-  for (i in 1:P){ # 
-    mu.beta[i] ~ dnorm(0, tau.beta[i])
-    tau.beta[i] ~ dgamma(0.1, 0.1)
-  }
-  # ordered cut-offs
-  for (i in 1:M){ # loop through countries
-    C[i,1] <- 0; # for identifiability
-    C[i,2] ~ dunif(C[i,1], C[i,3])
-    C[i,3] ~ dunif(C[i,2], C[i,4])
-    C[i,4] ~ dunif(C[i,3], 10)
-  }
-}\n', file=bugs)
-close(bugs)
+type = 'random'
+source('99_make_bugs.R')
 
 # prepare the additional data needed data for the random model
 R = toeplitz(c(1,0,0))
@@ -137,7 +95,7 @@ bdata = list(N = N,
              P = P,
              donate = donate, 
              ncat = ncat)
-C = matrix(rep(c(NA,0.1,0.2,0.3), n.country), byrow=TRUE, ncol=ncat-1) # needs ordered start
+C = matrix(rep(c_start, n.country), byrow=TRUE, ncol=ncat-1) # needs ordered start
 inits = list(beta = matrix(rep(0, P*n.country), ncol=P), 
              C = C,
              tau.beta = rep(1,P), 
@@ -153,4 +111,4 @@ bugs.results$summary
 
 ###
 # save results
-save(countries, n.country, age_labels, bugs.results, bugs.results.fixed, file='results/bugs_ordinal_model_age.RData')
+save(countries, n.country, age_labels, bugs.results, bugs.results.fixed, file=outfile)
